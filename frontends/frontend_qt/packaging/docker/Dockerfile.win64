@@ -41,7 +41,7 @@ WORKDIR /work
 FROM base AS qt-src
 COPY frontends/frontend_qt/packaging/docker/qt-toolchain.cmake /opt/toolchain/qt-toolchain.cmake
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-pip install --break-system-packages aqtinstall==3.3.0
+pip install --break-system-packages aqtinstall==3.3.0 fonttools
 aqt install-src windows 6.10.3 \
     -O /usr/src/qt6-static-src --archives qtbase qtsvg
 EOF

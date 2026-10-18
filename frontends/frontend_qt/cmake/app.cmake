@@ -83,13 +83,52 @@ target_link_libraries(bakajiten PRIVATE Qt6::Widgets Qt6::Svg Qt6::Network appse
 # (see build-win64.sh): other platforms use system fonts.
 option(BAKAJITEN_BUNDLE_CJK_FONT "Embed Noto Sans JP fallback font" OFF)
 if(BAKAJITEN_BUNDLE_CJK_FONT)
+    # Google's variable font defaults to Thin (wght=100), which
+    # renderers without axis selection (Wine) use as-is — thin
+    # glyphs. Instantiate a static Regular and normalize its names
+    # (instancer keeps the "Thin" family), then bundle that.
+    set(_cjk_var "${CMAKE_CURRENT_BINARY_DIR}/fonts/NotoSansJP-VF.ttf")
     set(_cjk_ttf "${CMAKE_CURRENT_BINARY_DIR}/fonts/NotoSansJP.ttf")
-    if(NOT EXISTS "${_cjk_ttf}")
+    if(NOT EXISTS "${_cjk_var}")
         message(STATUS "Downloading Noto Sans JP fallback font")
         file(DOWNLOAD
             "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf"
-            "${_cjk_ttf}"
+            "${_cjk_var}"
             EXPECTED_HASH SHA256=c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f)
+    endif()
+    find_package(Python3 COMPONENTS Interpreter)
+    if(NOT Python3_Interpreter_FOUND)
+        message(FATAL_ERROR "BAKAJITEN_BUNDLE_CJK_FONT needs a Python 3 interpreter (fontTools instancer)")
+    endif()
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c "import fontTools"
+        RESULT_VARIABLE _cjk_has_fonttools
+        OUTPUT_QUIET ERROR_QUIET)
+    if(_cjk_has_fonttools)
+        message(STATUS "Installing fontTools into the build tree")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -m pip install --quiet --target
+                "${CMAKE_CURRENT_BINARY_DIR}/fonts/pylibs" fonttools
+            RESULT_VARIABLE _cjk_pip_result
+            ERROR_VARIABLE _cjk_pip_error)
+        if(_cjk_pip_result)
+            message(FATAL_ERROR "pip install fonttools failed: ${_cjk_pip_error}")
+        endif()
+    endif()
+    set(_cjk_env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/fonts/pylibs")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "${_cjk_env}" "${Python3_EXECUTABLE}" -m
+            fontTools.varLib.instancer "${_cjk_var}" wght=400 -o "${_cjk_ttf}"
+        RESULT_VARIABLE _cjk_instance_result)
+    if(_cjk_instance_result)
+        message(FATAL_ERROR "Instantiating the static Noto Sans JP Regular failed")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "${_cjk_env}" "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/rename-cjk-font.py" "${_cjk_ttf}"
+        RESULT_VARIABLE _cjk_rename_result)
+    if(_cjk_rename_result)
+        message(FATAL_ERROR "Normalizing the Noto Sans JP names failed")
     endif()
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fonts/fonts.qrc"
         "<RCC>\n    <qresource prefix=\"/fonts\">\n        <file>NotoSansJP.ttf</file>\n    </qresource>\n</RCC>\n")
