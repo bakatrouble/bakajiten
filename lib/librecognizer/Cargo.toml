@@ -1,0 +1,21 @@
+[package]
+name = "librecognizer"
+version = "0.1.0"
+edition = "2021"
+description = "Classical handwritten-kanji matching modeled after ZKanji: geometry plus two-stage DTW/layout matcher"
+license = "MIT"
+readme = "../README.md"
+keywords = ["kanji", "ocr", "handwriting", "recognition", "kanjivg"]
+categories = ["science", "computer-vision"]
+
+[lib]
+name = "recognizer"
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rkyv.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+uniffi.workspace = true

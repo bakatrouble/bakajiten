@@ -1,0 +1,39 @@
+#!/bin/sh
+# Static Windows cross build. Run from the repo root:
+#   ./frontends/frontend_qt/packaging/build-win64.sh [clean]
+# Configures in frontends/frontend_qt/build-win64/builddir and
+# produces frontends/frontend_qt/build-win64/Bakajiten-win64.zip
+# (bakajiten.exe inside): one file, Windows system DLLs only. The
+# build tree is container-owned (root); `clean` wipes it from inside
+# the container (host rm fails on those files). First run builds the
+# image (Qt, ~40-60 min, cached in its own layer):
+#   docker build -f frontends/frontend_qt/packaging/docker/Dockerfile.win64 \
+#     -t bakajiten-cross:win64 .
+set -e
+cd "$(dirname "$0")/../../.."
+QTAPP="$PWD/frontends/frontend_qt"
+if [ "$1" = "clean" ]; then
+    docker run --rm -v "$QTAPP:/qtapp" bakajiten-cross:win64 \
+        sh -c 'rm -rf /qtapp/build-win64'
+    exit 0
+fi
+mkdir -p "$QTAPP/build-win64/builddir"
+docker run --rm -v "$PWD:/work" -v "$QTAPP/build-win64/builddir:/build" \
+    bakajiten-cross:win64 \
+    sh -c 'export HOME=/root; cmake -S /work/frontends/frontend_qt -B /build \
+        --toolchain /opt/toolchain/win64-toolchain.cmake \
+        -DQt6_DIR=/opt/qt6-static/lib/cmake/Qt6 \
+        -Dyaml-cpp_DIR=/opt/yaml-cpp-win/lib/cmake/yaml-cpp \
+        -DZLIB_INCLUDE_DIR=/usr/x86_64-w64-mingw32/sys-root/mingw/include \
+        -DZLIB_LIBRARY=/usr/x86_64-w64-mingw32/sys-root/mingw/lib/libz.a \
+        -DZLIB_LIBRARY_RELEASE=/usr/x86_64-w64-mingw32/sys-root/mingw/lib/libz.a \
+        -DRust_CARGO_TARGET=x86_64-pc-windows-gnu \
+        -DBAKAJITEN_BUNDLE_CJK_FONT=ON \
+        -DBUILD_QT_TESTS=OFF -DCMAKE_EXE_LINKER_FLAGS=-static \
+        && cmake --build /build'
+# Zip in the container (python3 is already there for aqt): the exe
+# needs no permission bits preserved. The font ships inside the
+# binary (BAKAJITEN_BUNDLE_CJK_FONT); only its license rides along.
+rm -f "$QTAPP/build-win64/Bakajiten-win64.zip"
+docker run --rm -v "$QTAPP/build-win64:/out" -v "$QTAPP/build-win64/builddir:/build" bakajiten-cross:win64 \
+    python3 -c "import zipfile; z = zipfile.ZipFile('/out/Bakajiten-win64.zip', 'w', zipfile.ZIP_DEFLATED); z.write('/build/bakajiten.exe', 'bakajiten.exe'); z.write('/opt/fonts/OFL.txt', 'OFL.txt'); z.close()"

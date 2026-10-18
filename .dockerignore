@@ -1,0 +1,15 @@
+# Never shipped into any image build context: git history, local
+# build trees, and bulk/packed data (dataimports/ + data/ are
+# hundreds of MB; target/ alone is tens of GB).
+.git/
+target/
+data/
+dataimports/
+# Packaging outputs (all live under frontends/frontend_qt/build-*/).
+build-*/
+frontends/frontend_qt/build*/
+Bakajiten-*.AppImage
+AppDir/
+# Dev scratch.
+.vscode/
+*.log

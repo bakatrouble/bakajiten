@@ -1,0 +1,12 @@
+.idea
+/target
+*.bin
+/data
+/docs
+AGENTS.md
+/dataimports/*
+/data-repo
+
+# Vendored JLPT snapshot (tanos.co.uk, CC-BY):
+# the live site is gone, so this file is the source, not a download.
+!/dataimports/jlpt.csv

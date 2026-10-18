@@ -1,0 +1,511 @@
+# Build + test on all three OSes, plus tag releases. Test data
+# comes from the separate data repository's releases (this tree
+# never packs data in CI).
+# Release packaging reuses CI's outputs instead of rebuilding: on
+# tags the Linux job uploads its `cmake --install` tree (data wiped
+# first) and the AppImage job deploys that tree via
+# build-appimage.sh SKIP_BUILD=1. Data artifacts are never bundled
+# into executables: install trees are data-free by construction,
+# and package jobs fail if data/*.bin shows up anyway.
+#
+# All builds are Release: dev UI loading needs GCC 16 + P2996
+# reflection, but release builds compile on any toolchain (MSVC,
+# Apple Clang included). The Windows job is an MSVC validation
+# build, not the shippable MinGW static exe. macOS publishes
+# per-arch zipped .app bundles (arm64 + Intel, no universal bundle,
+# no updater artifact); Linux publishes the AppImage plus a static
+# binary.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+# One run per branch: a fresh push cancels the still-running one
+# (we iterate fast; stale runs only burn queue time).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: 6.10.3
+  UNIFFI_BINDGEN_TAG: v0.10.0+v0.31.0
+  # Separate repository publishing versioned data assets
+  # (*.bin.gz) on its releases; CI only consumes.
+  DATA_REPO: bakatrouble/bakajiten-data
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-24.04
+            qt-host: linux
+            qt-arch: linux_gcc_64
+            qt-dir: gcc_64
+          - os: windows
+            runner: windows-2022
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+            qt-dir: msvc2022_64
+          - os: macos-arm64
+            runner: macos-26
+            qt-host: mac
+            qt-arch: clang_64
+            qt-dir: macos
+          - os: macos-intel
+            runner: macos-26-intel
+            qt-host: mac
+            qt-arch: clang_64
+            qt-dir: macos
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version from tag.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+            frontends/frontend_qt/CMakeLists.txt
+          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+            frontends/frontend_qt/src/main.cpp
+
+      - name: System deps (Linux).
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libyaml-cpp-dev zlib1g-dev libgl1-mesa-dev \
+            libfontconfig1 libfreetype6 libx11-6 libxkbcommon0 libegl1 libdbus-1-3 \
+            fonts-noto-cjk
+
+      - name: System deps (Windows).
+        if: matrix.os == 'windows'
+        run: |
+          vcpkg install yaml-cpp:x64-windows zlib:x64-windows
+          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+
+      - name: System deps (macOS).
+        if: startsWith(matrix.os, 'macos')
+        run: brew install ninja yaml-cpp
+
+      - name: Select Xcode (macOS).
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app
+          xcode-select -p
+          xcodebuild -version
+          xcrun --show-sdk-path
+          ls /Library/Developer/CommandLineTools/SDKs/ 2>/dev/null || true
+          # Pin the Xcode toolchain outright: /usr/bin/cc stays wired
+          # to the CLT (whose arm64 TBDs the linker rejects), so neither
+          # the compiler default nor the implicit link dirs may float.
+          # Scoped to files Configure reads — never GITHUB_ENV — so
+          # steps that build their own C extensions (pip, cargo
+          # scripts) keep the default toolchain. (CMAKE_OSX_SYSROOT
+          # has no env-var init, so the SDK travels as a file the
+          # Configure step turns into -D.)
+          SDK=$(xcrun --show-sdk-path)
+          echo "SDK=$SDK"
+          TCLIB=$(dirname $(dirname $(xcrun -f cc)))/lib
+          {
+            echo "-DCMAKE_OSX_SYSROOT=$SDK"
+            echo "-DCMAKE_C_IMPLICIT_LINK_DIRECTORIES=$SDK/usr/lib;$TCLIB"
+            echo "-DCMAKE_CXX_IMPLICIT_LINK_DIRECTORIES=$SDK/usr/lib;$TCLIB"
+          } > "$RUNNER_TEMP/xcode-flags.txt"
+          {
+            echo "export CC=$(xcrun -f cc)"
+            echo "export CXX=$(xcrun -f c++)"
+          } > "$RUNNER_TEMP/xcode-env.sh"
+          echo "--- xcode-flags.txt:"; cat "$RUNNER_TEMP/xcode-flags.txt"
+
+      - name: Rust toolchain.
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: ccache.
+        if: matrix.os != 'windows'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.os }}-qt
+
+      - name: Qt cache.
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/qt
+          key: qt-${{ env.QT_VERSION }}-${{ matrix.os }}-${{ matrix.qt-dir }}
+
+      - name: Qt via aqt.
+        if: steps.cache-qt.outputs.cache-hit != 'true'
+        run: |
+          python3 -m pip install --break-system-packages aqtinstall==3.3.0
+          aqt install-qt ${{ matrix.qt-host }} desktop "$QT_VERSION" ${{ matrix.qt-arch }} \
+            -O "${RUNNER_TEMP}/qt"
+
+      - name: Qt env.
+        run: echo "Qt6_DIR=${RUNNER_TEMP}/qt/${QT_VERSION}/${{ matrix.qt-dir }}/lib/cmake/Qt6" >> $GITHUB_ENV
+
+      - name: uniffi-bindgen-cpp cache.
+        id: cache-bindgen
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cpp*
+          key: uniffi-bindgen-cpp-${{ env.UNIFFI_BINDGEN_TAG }}-${{ matrix.os }}
+
+      - name: uniffi-bindgen-cpp.
+        if: steps.cache-bindgen.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cpp \
+            --tag "$UNIFFI_BINDGEN_TAG"
+
+      - name: Resolve data fingerprint.
+        id: data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Cache key for the test-data tree below: the tag plus the
+          # manifest hash, so a republished tag (same name, new
+          # bytes) still misses instead of serving stale artifacts.
+          rm -rf /tmp/dataref && mkdir -p /tmp/dataref && cd /tmp/dataref
+          TAG="$(gh release list --repo "$DATA_REPO" --limit 1 --json tagName -q '.[0].tagName')"
+          gh release download "$TAG" --repo "$DATA_REPO" --pattern manifest.json --dir . --clobber
+          echo "key=test-data-${TAG}-$(sha256sum manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Test data cache.
+        id: cache-data
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: ${{ steps.data.outputs.key }}
+
+      - name: Test data.
+        if: steps.cache-data.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data
+          gh release download --repo "$DATA_REPO" --pattern '*.bin.gz' --dir data --clobber
+          gunzip -k data/*.bin.gz
+          ls data/
+
+      - name: MSVC env (Windows).
+        if: matrix.os == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: De-shadow MSVC link (Windows).
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          # Git for Windows ships a coreutils `link.exe` that shadows
+          # MSVC's linker in rustc's PATH lookup (fails as
+          # `/usr/bin/link: extra operand`). Drop Git's usr/bin —
+          # done in PowerShell so the native `;`-separated PATH is
+          # never mangled by POSIX conversion.
+          $p = ($env:PATH -split ';' | Where-Object { $_ -ne 'C:\Program Files\Git\usr\bin' }) -join ';'
+          "PATH=$p" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-Command link.exe | Select-Object -ExpandProperty Source
+
+      - name: Pin Rust linker (Windows).
+        if: matrix.os == 'windows'
+        shell: bash
+        run: |
+          # Belt and suspenders for the above: rustc does not always
+          # resolve link.exe via PATH, so point its target triple at
+          # MSVC's linker outright (derived from cl.exe, which CMake
+          # already resolves correctly). The no-arg call proves which
+          # binary it is: MSVC prints its banner, coreutils errors.
+          LINKER="$(dirname "$(command -v cl.exe)")/link.exe"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$LINKER" >> "$GITHUB_ENV"
+          "$LINKER" 2>&1 | head -1 || true
+
+      - name: Build cache.
+        # Incremental builds across runs: Ninja rebuilds only what
+        # changed (including Corrosion's Rust outputs, which live
+        # under build/ and which rust-cache does not cover). Keyed
+        # on OS + Qt + every build input; the prefix fallback keeps
+        # partial hits useful. Absolute paths are stable across
+        # runners, so restored trees link and run as-is.
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ matrix.os }}-${{ env.QT_VERSION }}-${{ hashFiles('frontends/frontend_qt/**', 'lib/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            build-${{ matrix.os }}-
+
+      - name: Configure (Unix).
+        if: matrix.os != 'windows'
+        run: >
+          APPLE_FLAGS=""; if [ -f "$RUNNER_TEMP/xcode-flags.txt" ]; then APPLE_FLAGS="$(tr '\n' ' ' < "$RUNNER_TEMP/xcode-flags.txt")"; fi;
+          if [ -f "$RUNNER_TEMP/xcode-env.sh" ]; then . "$RUNNER_TEMP/xcode-env.sh"; fi;
+          cmake -S frontends/frontend_qt -B build -G Ninja $APPLE_FLAGS
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DBAKAJITEN_CXX_STANDARD=20 -DBUILD_QT_TESTS=ON
+
+      - name: Dump Apple toolchain (macOS).
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          grep -E 'CMAKE_OSX_SYSROOT|IMPLICIT_LINK_DIRECTORIES|CMAKE_CXX_COMPILER:|CMAKE_C_COMPILER:' build/CMakeCache.txt || true
+          xcrun -f cc; xcrun --show-sdk-path
+
+      - name: Configure (Windows).
+        if: matrix.os == 'windows'
+        run: >
+          cmake -S frontends/frontend_qt -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DBAKAJITEN_CXX_STANDARD=20 -DBUILD_QT_TESTS=ON
+
+      - name: Build.
+        run: cmake --build build --target bakajiten test_mainwindow
+
+      - name: Test PATH (Windows).
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          # Test binaries link Qt + vcpkg shared libs; neither dir
+          # is on PATH by default (native format here, like the
+          # de-shadow step above).
+          "$env:RUNNER_TEMP\qt\$env:QT_VERSION\${{ matrix.qt-dir }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Test.
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_FORCE_STDERR_LOGGING: 1
+        run: ctest --output-on-failure --test-dir build
+
+      - name: Upload test log on failure.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lasttest-${{ matrix.os }}
+          path: build/Testing/Temporary/LastTest.log
+          retention-days: 7
+
+      - name: Publish macOS app.
+        if: startsWith(github.ref, 'refs/tags/v') && startsWith(matrix.os, 'macos')
+        run: |
+          ARCH="${{ matrix.os == 'macos-arm64' && 'arm64' || 'x64' }}"
+          frontends/frontend_qt/packaging/bundle-macos-app.sh \
+            build/bakajiten "Bakajiten-macos-${ARCH}.zip"
+
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v') && startsWith(matrix.os, 'macos')
+        with:
+          name: ${{ matrix.os }}
+          path: Bakajiten-macos-*.zip
+          retention-days: 7
+
+      - name: Install tree for AppImage.
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'linux'
+        run: |
+          rm -rf data
+          DESTDIR="$PWD/frontends/frontend_qt/build-appimage/AppDir" cmake --install build --prefix /usr
+          if compgen -G "frontends/frontend_qt/build-appimage/AppDir/**/*.bin" > /dev/null; then
+            echo "data artifact inside AppDir — refusing to bundle"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'linux'
+        with:
+          name: appdir
+          path: frontends/frontend_qt/build-appimage/AppDir
+          retention-days: 1
+
+  appimage:
+    name: AppImage
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: appdir
+          path: frontends/frontend_qt/build-appimage/AppDir
+
+      - name: No bundled data.
+        run: |
+          if compgen -G "frontends/frontend_qt/build-appimage/AppDir/**/*.bin" > /dev/null; then
+            echo "data artifact inside AppDir — refusing to bundle"
+            exit 1
+          fi
+
+      - name: Docker Buildx.
+        uses: docker/setup-buildx-action@v3
+
+      - name: Deploy image.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontends/frontend_qt/packaging/docker/Dockerfile.appimage
+          tags: bakajiten-appimage
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy AppImage.
+        run: >
+          env SKIP_BUILD=1 NO_STRIP=1
+          frontends/frontend_qt/packaging/build-appimage.sh
+          "$PWD/frontends/frontend_qt/build-appimage/AppDir" "$PWD/frontends/frontend_qt/build-appimage/Bakajiten-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: frontends/frontend_qt/build-appimage/Bakajiten-x86_64.AppImage
+          retention-days: 7
+
+  win-exe:
+    name: Windows exe
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version from tag.
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+            frontends/frontend_qt/CMakeLists.txt
+          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+            frontends/frontend_qt/src/main.cpp
+
+      - name: No bundled data.
+        run: |
+          if compgen -G "data/*.bin" > /dev/null; then
+            echo "data/*.bin present — refusing to bundle data into the executable"
+            exit 1
+          fi
+
+      - name: Docker Buildx.
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cross image.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontends/frontend_qt/packaging/docker/Dockerfile.win64
+          tags: bakajiten-cross:win64
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build exe.
+        run: ./frontends/frontend_qt/packaging/build-win64.sh
+
+      - name: Rename.
+        run: cp frontends/frontend_qt/build-win64/Bakajiten-win64.zip "Bakajiten-win64-${GITHUB_REF_NAME}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-exe
+          path: Bakajiten-win64-*.zip
+          retention-days: 7
+
+  linux-static:
+    name: Static Linux binary
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version from tag.
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+            frontends/frontend_qt/CMakeLists.txt
+          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+            frontends/frontend_qt/src/main.cpp
+
+      - name: No bundled data.
+        run: |
+          if compgen -G "data/*.bin" > /dev/null; then
+            echo "data/*.bin present — refusing to bundle data into the executable"
+            exit 1
+          fi
+
+      - name: Docker Buildx.
+        uses: docker/setup-buildx-action@v3
+
+      - name: Static-Qt image.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontends/frontend_qt/packaging/docker/Dockerfile.linux-static
+          tags: bakajiten-cross:linux-static
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build binary.
+        run: ./frontends/frontend_qt/packaging/build-linuxstatic.sh
+
+      - name: Rename.
+        run: cp frontends/frontend_qt/build-linuxstatic/Bakajiten-linux-x86_64.tar.gz Bakajiten-linux-x86_64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-static
+          path: Bakajiten-linux-x86_64.tar.gz
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [appimage, win-exe, linux-static, build-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: appimage
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-exe
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-intel
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-static
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

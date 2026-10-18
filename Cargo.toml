@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["lib/libdict", "lib/librecognizer", "utils"]
+
+[workspace.dependencies]
+quick-xml = "0.42.0"
+serde = { version = "1.0.229", features = ["derive"] }
+rkyv = "0.8"
+memmap2 = "0.9"
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+clap = { version = "4.6.7", features = ["derive"] }
+rayon = "1.12.0"
+uniffi = { version = "0.31.0", features = ["scaffolding-ffi-buffer-fns", "wasm-unstable-single-threaded"] }
+ureq = "3"
+flate2 = "1"
+indicatif = "0.18"
+encoding_rs = "0.8"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+librecognizer = { path = "lib/librecognizer", version = "0.1.0" }
+libdict = { path = "lib/libdict", version = "0.1.0" }
+
+[profile.release]
+#lto = true
+#codegen-units = 1
