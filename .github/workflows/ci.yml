@@ -84,7 +84,7 @@ jobs:
           rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
 
       - name: System deps (Linux).
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && !startsWith(github.ref, 'refs/tags/v')
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libyaml-cpp-dev zlib1g-dev libgl1-mesa-dev \
@@ -92,7 +92,7 @@ jobs:
             fonts-noto-cjk
 
       - name: System deps (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         run: |
           vcpkg install yaml-cpp:x64-windows zlib:x64-windows
           echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
@@ -132,17 +132,20 @@ jobs:
           echo "--- xcode-flags.txt:"; cat "$RUNNER_TEMP/xcode-flags.txt"
 
       - name: Rust toolchain.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
 
       - name: ccache.
-        if: matrix.os != 'windows'
+        if: matrix.os != 'windows' && (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         uses: hendrikmuhs/ccache-action@v1
         with:
           key: ${{ matrix.os }}-qt
 
       - name: Qt cache.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         id: cache-qt
         uses: actions/cache@v4
         with:
@@ -150,16 +153,18 @@ jobs:
           key: qt-${{ env.QT_VERSION }}-${{ matrix.os }}-${{ matrix.qt-dir }}
 
       - name: Qt via aqt.
-        if: steps.cache-qt.outputs.cache-hit != 'true'
+        if: steps.cache-qt.outputs.cache-hit != 'true' && (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         run: |
           python3 -m pip install --break-system-packages aqtinstall==3.3.0
           aqt install-qt ${{ matrix.qt-host }} desktop "$QT_VERSION" ${{ matrix.qt-arch }} \
             -O "${RUNNER_TEMP}/qt"
 
       - name: Qt env.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         run: echo "Qt6_DIR=${RUNNER_TEMP}/qt/${QT_VERSION}/${{ matrix.qt-dir }}/lib/cmake/Qt6" >> $GITHUB_ENV
 
       - name: uniffi-bindgen-cpp cache.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         id: cache-bindgen
         uses: actions/cache@v4
         with:
@@ -167,12 +172,13 @@ jobs:
           key: uniffi-bindgen-cpp-${{ env.UNIFFI_BINDGEN_TAG }}-${{ matrix.os }}
 
       - name: uniffi-bindgen-cpp.
-        if: steps.cache-bindgen.outputs.cache-hit != 'true'
+        if: steps.cache-bindgen.outputs.cache-hit != 'true' && (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         run: |
           cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cpp \
             --tag "$UNIFFI_BINDGEN_TAG"
 
       - name: Resolve data fingerprint.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         id: data
         env:
           GH_TOKEN: ${{ github.token }}
@@ -186,6 +192,7 @@ jobs:
           echo "key=test-data-${TAG}-$(sha256sum manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Test data cache.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         id: cache-data
         uses: actions/cache@v4
         with:
@@ -193,7 +200,7 @@ jobs:
           key: ${{ steps.data.outputs.key }}
 
       - name: Test data.
-        if: steps.cache-data.outputs.cache-hit != 'true'
+        if: steps.cache-data.outputs.cache-hit != 'true' && (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -203,11 +210,11 @@ jobs:
           ls data/
 
       - name: MSVC env (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: De-shadow MSVC link (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           # Git for Windows ships a coreutils `link.exe` that shadows
@@ -220,7 +227,7 @@ jobs:
           Get-Command link.exe | Select-Object -ExpandProperty Source
 
       - name: Pin Rust linker (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           # Belt and suspenders for the above: rustc does not always
@@ -233,6 +240,7 @@ jobs:
           "$LINKER" 2>&1 | head -1 || true
 
       - name: Build cache.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         # Incremental builds across runs: Ninja rebuilds only what
         # changed (including Corrosion's Rust outputs, which live
         # under build/ and which rust-cache does not cover). Keyed
@@ -247,7 +255,7 @@ jobs:
             build-${{ matrix.os }}-
 
       - name: Configure (Unix).
-        if: matrix.os != 'windows'
+        if: matrix.os != 'windows' && (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         run: >
           APPLE_FLAGS=""; if [ -f "$RUNNER_TEMP/xcode-flags.txt" ]; then APPLE_FLAGS="$(tr '\n' ' ' < "$RUNNER_TEMP/xcode-flags.txt")"; fi;
           if [ -f "$RUNNER_TEMP/xcode-env.sh" ]; then . "$RUNNER_TEMP/xcode-env.sh"; fi;
@@ -263,16 +271,17 @@ jobs:
           xcrun -f cc; xcrun --show-sdk-path
 
       - name: Configure (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         run: >
           cmake -S frontends/frontend_qt -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release -DBAKAJITEN_CXX_STANDARD=20 -DBUILD_QT_TESTS=ON
 
       - name: Build.
+        if: (!startsWith(github.ref, 'refs/tags/v') || startsWith(matrix.os, 'macos'))
         run: cmake --build build --target bakajiten test_mainwindow
 
       - name: Test PATH (Windows).
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           # Test binaries link Qt + vcpkg shared libs; neither dir
