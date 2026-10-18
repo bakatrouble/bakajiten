@@ -21,13 +21,23 @@ if [ "$1" = "clean" ]; then
     exit 0
 fi
 mkdir -p "$QTAPP/build-linuxstatic/builddir"
+# Persistent ccache (CI caches this dir across runs; the container
+# paths it hashes are stable, so hits survive fresh checkouts).
+CCACHE_HOST="$QTAPP/build-ccache/linux-static"
+mkdir -p "$CCACHE_HOST"
 docker run --rm -v "$PWD:/work" -v "$QTAPP/build-linuxstatic/builddir:/build" \
+    -v "$CCACHE_HOST:/ccache" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1G \
     bakajiten-cross:linux-static \
     sh -c 'export HOME=/root; cmake -S /work/frontends/frontend_qt -B /build \
         -DQt6_DIR=/opt/qt6-static/lib/cmake/Qt6 \
         -Dyaml-cpp_DIR=/opt/yaml-cpp-linux/lib/cmake/yaml-cpp \
         -DOPENSSL_ROOT_DIR=/opt/openssl \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DBUILD_QT_TESTS=OFF \
-        && cmake --build /build'
+        && cmake --build /build && ccache -s'
+# The cache is container-written (root); hand it back so the host
+# (and CI's cache save) can read it.
+docker run --rm -v "$CCACHE_HOST:/ccache" bakajiten-cross:linux-static \
+    chown -R "$(id -u):$(id -g)" /ccache
 rm -f "$QTAPP/build-linuxstatic/Bakajiten-linux-x86_64.tar.gz"
 tar -czf "$QTAPP/build-linuxstatic/Bakajiten-linux-x86_64.tar.gz" -C "$QTAPP/build-linuxstatic/builddir" bakajiten

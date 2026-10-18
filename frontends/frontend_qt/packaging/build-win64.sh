@@ -18,9 +18,14 @@ if [ "$1" = "clean" ]; then
     exit 0
 fi
 mkdir -p "$QTAPP/build-win64/builddir"
+# Persistent ccache (CI caches this dir across runs; the container
+# paths it hashes are stable, so hits survive fresh checkouts).
+CCACHE_HOST="$QTAPP/build-ccache/win64"
+mkdir -p "$CCACHE_HOST"
 docker run --rm -v "$PWD:/work" -v "$QTAPP/build-win64/builddir:/build" \
+    -v "$CCACHE_HOST:/ccache" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1G \
     bakajiten-cross:win64 \
-    sh -c 'export HOME=/root; cmake -S /work/frontends/frontend_qt -B /build \
+    sh -c 'export HOME=/root; command -v ccache >/dev/null || dnf install -y ccache; cmake -S /work/frontends/frontend_qt -B /build \
         --toolchain /opt/toolchain/win64-toolchain.cmake \
         -DQt6_DIR=/opt/qt6-static/lib/cmake/Qt6 \
         -Dyaml-cpp_DIR=/opt/yaml-cpp-win/lib/cmake/yaml-cpp \
@@ -29,8 +34,13 @@ docker run --rm -v "$PWD:/work" -v "$QTAPP/build-win64/builddir:/build" \
         -DZLIB_LIBRARY_RELEASE=/usr/x86_64-w64-mingw32/sys-root/mingw/lib/libz.a \
         -DRust_CARGO_TARGET=x86_64-pc-windows-gnu \
         -DBAKAJITEN_BUNDLE_CJK_FONT=ON \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DBUILD_QT_TESTS=OFF -DCMAKE_EXE_LINKER_FLAGS=-static \
-        && cmake --build /build'
+        && cmake --build /build && ccache -s'
+# The cache is container-written (root); hand it back so the host
+# (and CI's cache save) can read it.
+docker run --rm -v "$CCACHE_HOST:/ccache" bakajiten-cross:win64 \
+    chown -R "$(id -u):$(id -g)" /ccache
 # Zip in the container (python3 is already there for aqt): the exe
 # needs no permission bits preserved. The font ships inside the
 # binary (BAKAJITEN_BUNDLE_CJK_FONT); only its license rides along.

@@ -336,6 +336,13 @@ jobs:
 
       # Prebuilt deploy image (Qt + linuxdeploy baked in): pull,
       # never rebuild, in CI.
+      - name: Packaging ccache.
+        uses: actions/cache@v4
+        with:
+          path: frontends/frontend_qt/build-ccache/appimage
+          key: ccache-pkg-appimage-${{ github.run_id }}
+          restore-keys: |
+            ccache-pkg-appimage-
       - name: Prebuilt image.
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -392,6 +399,13 @@ jobs:
           fi
 
       # Prebuilt MinGW + static-Qt image: pull, never rebuild.
+      - name: Packaging ccache.
+        uses: actions/cache@v4
+        with:
+          path: frontends/frontend_qt/build-ccache/win64
+          key: ccache-pkg-win64-${{ github.run_id }}
+          restore-keys: |
+            ccache-pkg-win64-
       - name: Cross image.
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -444,6 +458,13 @@ jobs:
           fi
 
       # Prebuilt static-Qt image: pull, never rebuild.
+      - name: Packaging ccache.
+        uses: actions/cache@v4
+        with:
+          path: frontends/frontend_qt/build-ccache/linux-static
+          key: ccache-pkg-linux-static-${{ github.run_id }}
+          restore-keys: |
+            ccache-pkg-linux-static-
       - name: Static-Qt image.
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
