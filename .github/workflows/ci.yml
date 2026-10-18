@@ -74,10 +74,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+          # -i.bak is portable: GNU and BSD sed both accept an
+          # explicit suffix, while bare -i breaks on macOS.
+          sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
             frontends/frontend_qt/CMakeLists.txt
-          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+          sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
             frontends/frontend_qt/src/main.cpp
+          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
 
       - name: System deps (Linux).
         if: matrix.os == 'linux'
@@ -384,10 +387,13 @@ jobs:
       - name: Stamp version from tag.
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+          # -i.bak is portable: GNU and BSD sed both accept an
+          # explicit suffix, while bare -i breaks on macOS.
+          sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
             frontends/frontend_qt/CMakeLists.txt
-          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+          sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
             frontends/frontend_qt/src/main.cpp
+          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
 
       - name: No bundled data.
         run: |
@@ -435,10 +441,13 @@ jobs:
       - name: Stamp version from tag.
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          sed -i "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
+          # -i.bak is portable: GNU and BSD sed both accept an
+          # explicit suffix, while bare -i breaks on macOS.
+          sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
             frontends/frontend_qt/CMakeLists.txt
-          sed -i "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
+          sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
             frontends/frontend_qt/src/main.cpp
+          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
 
       - name: No bundled data.
         run: |
