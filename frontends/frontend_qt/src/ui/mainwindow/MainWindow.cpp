@@ -109,7 +109,13 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(ui->actionAboutQt, &QAction::triggered, this, [this] { QMessageBox::aboutQt(this); });
     // Updates: manual check from Help; automatic shortly after
-    // startup and hourly while the opt-out stays off.
+    // startup and hourly while the opt-out stays off. Unset
+    // artifact builds (distro packages with their own update flow)
+    // never phone home: hide the manual check instead of a dead
+    // menu item (the checker itself already no-ops).
+    if (QStringLiteral(BAKAJITEN_UPDATE_ARTIFACT).isEmpty()) {
+        ui->actionCheckUpdates->setVisible(false);
+    }
     updateChecker = new UpdateChecker(this);
     connect(updateChecker, &UpdateChecker::updateFound, this, &MainWindow::onUpdateFound);
     connect(updateChecker, &UpdateChecker::noArtifact, this, &MainWindow::onUpdateNoArtifact);
