@@ -5,9 +5,9 @@
 target/
 data/
 dataimports/
-# Packaging outputs (all live under frontends/frontend_qt/build-*/).
+# Packaging outputs (all live under frontends/qt/build-*/).
 build-*/
-frontends/frontend_qt/build*/
+frontends/qt/build*/
 Bakajiten-*.AppImage
 AppDir/
 # Dev scratch.

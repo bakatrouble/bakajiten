@@ -13,9 +13,9 @@
 # reflection, but release builds compile on any toolchain (MSVC,
 # Apple Clang included). The Windows job is an MSVC validation
 # build, not the shippable MinGW static exe. macOS publishes
-# per-arch zipped .app bundles (arm64 + Intel, no universal bundle,
-# no updater artifact); Linux publishes the AppImage plus a static
-# binary.
+# per-arch zipped .app bundles (arm64 + Intel, no universal bundle),
+# each carrying its own updater artifact kind (macos-arm64 /
+# macos-x64); Linux publishes the AppImage plus a static binary.
 name: CI
 
 on:
@@ -78,10 +78,10 @@ jobs:
           # -i.bak is portable: GNU and BSD sed both accept an
           # explicit suffix, while bare -i breaks on macOS.
           sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
-            frontends/frontend_qt/CMakeLists.txt
+            frontends/qt/CMakeLists.txt
           sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
-            frontends/frontend_qt/src/main.cpp
-          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
+            frontends/qt/src/main.cpp
+          rm -f frontends/qt/CMakeLists.txt.bak frontends/qt/src/main.cpp.bak
 
       - name: System deps (Linux).
         if: matrix.os == 'linux' && !startsWith(github.ref, 'refs/tags/v')
@@ -250,7 +250,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: build-${{ matrix.os }}-${{ env.QT_VERSION }}-${{ hashFiles('frontends/frontend_qt/**', 'lib/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml') }}
+          key: build-${{ matrix.os }}-${{ env.QT_VERSION }}-${{ hashFiles('frontends/qt/**', 'lib/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml') }}
           restore-keys: |
             build-${{ matrix.os }}-
 
@@ -259,10 +259,12 @@ jobs:
         run: >
           APPLE_FLAGS=""; if [ -f "$RUNNER_TEMP/xcode-flags.txt" ]; then APPLE_FLAGS="$(tr '\n' ' ' < "$RUNNER_TEMP/xcode-flags.txt")"; fi;
           if [ -f "$RUNNER_TEMP/xcode-env.sh" ]; then . "$RUNNER_TEMP/xcode-env.sh"; fi;
-          cmake -S frontends/frontend_qt -B build -G Ninja $APPLE_FLAGS
+          UART=""; if ${{ startsWith(github.ref, 'refs/tags/v') }}; then case "${{ matrix.os }}" in
+          macos-arm64) UART="macos-arm64";; macos-intel) UART="macos-x64";; esac; fi;
+          cmake -S frontends/qt -B build -G Ninja $APPLE_FLAGS
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DBAKAJITEN_CXX_STANDARD=20 -DBUILD_QT_TESTS=ON
+          -DBAKAJITEN_CXX_STANDARD=20 -DBAKAJITEN_UPDATE_ARTIFACT=$UART -DBUILD_QT_TESTS=ON
 
       - name: Dump Apple toolchain (macOS).
         if: startsWith(matrix.os, 'macos')
@@ -273,7 +275,7 @@ jobs:
       - name: Configure (Windows).
         if: matrix.os == 'windows' && !startsWith(github.ref, 'refs/tags/v')
         run: >
-          cmake -S frontends/frontend_qt -B build -G Ninja
+          cmake -S frontends/qt -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release -DBAKAJITEN_CXX_STANDARD=20 -DBUILD_QT_TESTS=ON
 
       - name: Build.
@@ -309,14 +311,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && startsWith(matrix.os, 'macos')
         run: |
           ARCH="${{ matrix.os == 'macos-arm64' && 'arm64' || 'x64' }}"
-          frontends/frontend_qt/packaging/bundle-macos-app.sh \
-            build/bakajiten "Bakajiten-macos-${ARCH}.zip"
+          frontends/qt/packaging/bundle-macos-app.sh \
+            build/bakajiten "bakajiten-macos-${ARCH}.zip"
 
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/v') && startsWith(matrix.os, 'macos')
         with:
           name: ${{ matrix.os }}
-          path: Bakajiten-macos-*.zip
+          path: bakajiten-macos-*.zip
           retention-days: 7
 
   appimage:
@@ -339,7 +341,7 @@ jobs:
       - name: Packaging ccache.
         uses: actions/cache@v4
         with:
-          path: frontends/frontend_qt/build-ccache/appimage
+          path: frontends/qt/build-ccache/appimage
           key: ccache-pkg-appimage-${{ github.run_id }}
           restore-keys: |
             ccache-pkg-appimage-
@@ -356,13 +358,13 @@ jobs:
       - name: Deploy AppImage.
         run: >
           env NO_STRIP=1
-          frontends/frontend_qt/packaging/build-appimage.sh
-          "$PWD/frontends/frontend_qt/build-appimage/AppDir" "$PWD/frontends/frontend_qt/build-appimage/Bakajiten-x86_64.AppImage"
+          frontends/qt/packaging/build-appimage.sh
+          "$PWD/frontends/qt/build-appimage/AppDir" "$PWD/frontends/qt/build-appimage/Bakajiten-x86_64.AppImage"
 
       - uses: actions/upload-artifact@v4
         with:
           name: appimage
-          path: frontends/frontend_qt/build-appimage/Bakajiten-x86_64.AppImage
+          path: frontends/qt/build-appimage/Bakajiten-x86_64.AppImage
           retention-days: 7
 
   win-exe:
@@ -386,10 +388,10 @@ jobs:
           # -i.bak is portable: GNU and BSD sed both accept an
           # explicit suffix, while bare -i breaks on macOS.
           sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
-            frontends/frontend_qt/CMakeLists.txt
+            frontends/qt/CMakeLists.txt
           sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
-            frontends/frontend_qt/src/main.cpp
-          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
+            frontends/qt/src/main.cpp
+          rm -f frontends/qt/CMakeLists.txt.bak frontends/qt/src/main.cpp.bak
 
       - name: No bundled data.
         run: |
@@ -402,7 +404,7 @@ jobs:
       - name: Packaging ccache.
         uses: actions/cache@v4
         with:
-          path: frontends/frontend_qt/build-ccache/win64
+          path: frontends/qt/build-ccache/win64
           key: ccache-pkg-win64-${{ github.run_id }}
           restore-keys: |
             ccache-pkg-win64-
@@ -413,15 +415,15 @@ jobs:
           docker tag ghcr.io/bakatrouble/bakajiten-cross:win64 bakajiten-cross:win64
 
       - name: Build exe.
-        run: ./frontends/frontend_qt/packaging/build-win64.sh
+        run: ./frontends/qt/packaging/build-win64.sh
 
       - name: Rename.
-        run: cp frontends/frontend_qt/build-win64/Bakajiten-win64.zip "Bakajiten-win64-${GITHUB_REF_NAME}.zip"
+        run: cp frontends/qt/build-win64/bakajiten-win64.zip "bakajiten-win64-${GITHUB_REF_NAME}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: win-exe
-          path: Bakajiten-win64-*.zip
+          path: bakajiten-win64-*.zip
           retention-days: 7
 
   linux-static:
@@ -445,10 +447,10 @@ jobs:
           # -i.bak is portable: GNU and BSD sed both accept an
           # explicit suffix, while bare -i breaks on macOS.
           sed -i.bak "s/project(bakajiten_qt VERSION [0-9.]\\+)/project(bakajiten_qt VERSION ${VER})/" \
-            frontends/frontend_qt/CMakeLists.txt
+            frontends/qt/CMakeLists.txt
           sed -i.bak "s/setApplicationVersion(QStringLiteral(\"[0-9.]\\+\"))/setApplicationVersion(QStringLiteral(\"${VER}\"))/" \
-            frontends/frontend_qt/src/main.cpp
-          rm -f frontends/frontend_qt/CMakeLists.txt.bak frontends/frontend_qt/src/main.cpp.bak
+            frontends/qt/src/main.cpp
+          rm -f frontends/qt/CMakeLists.txt.bak frontends/qt/src/main.cpp.bak
 
       - name: No bundled data.
         run: |
@@ -461,7 +463,7 @@ jobs:
       - name: Packaging ccache.
         uses: actions/cache@v4
         with:
-          path: frontends/frontend_qt/build-ccache/linux-static
+          path: frontends/qt/build-ccache/linux-static
           key: ccache-pkg-linux-static-${{ github.run_id }}
           restore-keys: |
             ccache-pkg-linux-static-
@@ -472,15 +474,15 @@ jobs:
           docker tag ghcr.io/bakatrouble/bakajiten-cross:linux-static bakajiten-cross:linux-static
 
       - name: Build binary.
-        run: ./frontends/frontend_qt/packaging/build-linuxstatic.sh
+        run: ./frontends/qt/packaging/build-linuxstatic.sh
 
       - name: Rename.
-        run: cp frontends/frontend_qt/build-linuxstatic/Bakajiten-linux-x86_64.tar.gz Bakajiten-linux-x86_64.tar.gz
+        run: cp frontends/qt/build-linuxstatic/bakajiten-linux64-static.tar.gz bakajiten-linux64-static.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-static
-          path: Bakajiten-linux-x86_64.tar.gz
+          path: bakajiten-linux64-static.tar.gz
           retention-days: 7
 
   publish:

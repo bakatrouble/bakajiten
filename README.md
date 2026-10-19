@@ -1,4 +1,4 @@
-# Bakajiten — 0.1.0
+# bakajiten — 0.1.0
 
 Japanese dictionary lookup with handwriting recognition — a Qt
 Widgets desktop app on a Rust backend.
@@ -48,9 +48,9 @@ cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
 Desktop app (Qt6, C++26, `uniffi-bindgen-cpp` on PATH, system yaml-cpp):
 
 ```sh
-cmake -S frontends/frontend_qt -B frontends/frontend_qt/build
-cmake --build frontends/frontend_qt/build
-cd frontends/frontend_qt && ./build/bakajiten
+cmake -S frontends/qt -B frontends/qt/build
+cmake --build frontends/qt/build
+cd frontends/qt && ./build/bakajiten
 ```
 
 Tests: `ctest` in a configured Qt dir (offscreen) and `cargo test`
@@ -75,7 +75,7 @@ follow [zkanji](https://github.com/z1dev/zkanji) by Sólyom Zoltán.
 librecognizer/   classical handwriting matcher (trajectories, DTW, layout, rank)
 libdict/         dictionary storage + lookup, UniFFI boundary
 utils/           data pipeline: fetch-data (incl. kokugo import), pack-data
-frontends/frontend_qt/     Qt Widgets desktop app (bakajiten binary)
+frontends/qt/     Qt Widgets desktop app (bakajiten binary)
 dataimports/     bulk sources (not in git)
 data/            packed artifacts (not in git)
 ```
