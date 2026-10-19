@@ -497,6 +497,7 @@ fn deinflect_walks_doc_chains() {
             vec!["past", "potential / passive", "causative"],
         ),
         ("かかされる", "かかる", vec!["passive", "causative"]),
+        ("かかす", "かかる", vec!["causative"]),
         ("きて", "くる", vec!["conjunctive"]),
         ("して", "する", vec!["conjunctive"]),
         (
@@ -555,6 +556,20 @@ fn deinflect_unions_same_surface_claims() {
         .expect("candidate");
     assert!(hit.classes.contains(InflClass::V1));
     assert!(hit.classes.contains(InflClass::V5r));
+}
+
+/// No bare-す peel: てす once reached てる/て/くる through the old
+/// generic す→る inversion plus the bare て→くる hop, showing
+/// 来る・繰る・照る・抉る as deinflected hits for a non-form. The
+/// peel now needs an a-row stem (かかす→かかる) and the bare
+/// て/た→くる hops are gone (くる's own forms are きて/きた).
+#[test]
+fn deinflect_rejects_bare_su_peel() {
+    use super::deinflect::deinflect;
+    let surfaces: Vec<String> = deinflect("てす").into_iter().map(|c| c.surface).collect();
+    assert!(!surfaces.contains(&"てる".to_string()), "てす reached てる: {surfaces:?}");
+    assert!(!surfaces.contains(&"て".to_string()), "てす reached て: {surfaces:?}");
+    assert!(!surfaces.contains(&"くる".to_string()), "てす reached くる: {surfaces:?}");
 }
 
 /// Every tag variant carries a non-empty tooltip description

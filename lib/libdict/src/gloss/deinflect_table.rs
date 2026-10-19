@@ -2,7 +2,7 @@
 //! over the godan row map (§1) at first use, then bucket by final
 //! kana of `from` for runtime lookup (§4). Buckets hold
 //! longest-`from`-first rules; construction asserts the §4 shape
-//! (376 rules, every rule in exactly its ending bucket). Display
+//! (382 rules, every rule in exactly its ending bucket). Display
 //! `reason` names follow zkanji's `wordInflection` vocabulary;
 //! connector-only hops keep engine-internal names (see the doc).
 
@@ -25,10 +25,13 @@ pub struct Rule {
     pub expanded: bool,
 }
 
-/// Pattern output: the row class (`Row`, for `[vowel]` patterns), a
-/// fixed claim set, or transparent (`Open` — state unchanged).
+/// Pattern output: the row class (`Row`, for `[vowel]` patterns),
+/// row expansion with a fixed claim set (`RowSet` — when the
+/// dictionary form's class doesn't follow the stem row), a fixed
+/// claim set, or transparent (`Open` — state unchanged).
 enum Out {
     Row,
+    RowSet(&'static [Class]),
     Set(&'static [Class]),
     Open,
 }
@@ -178,8 +181,9 @@ const PATTERNS: &[Pattern] = &[
     Pattern("て", "る", Out::Set(OUT_V1), "conjunctive"),
     Pattern("きた", "くる", Out::Set(OUT_VK), "past"),
     Pattern("きて", "くる", Out::Set(OUT_VK), "conjunctive"),
-    Pattern("た", "くる", Out::Set(OUT_VK), "past"),
-    Pattern("て", "くる", Out::Set(OUT_VK), "conjunctive"),
+    // No bare た→くる / て→くる: くる's own forms are きた/きて
+    // above; the bare endings only ever peel る-verbs (たべた→
+    // たべる) and otherwise hallucinate compounds (てす→くる).
     Pattern("した", "する", Out::Set(OUT_VS), "past"),
     Pattern("して", "する", Out::Set(OUT_VS), "conjunctive"),
     Pattern("じた", "ずる", Out::Set(OUT_VZ), "past"),
@@ -259,10 +263,12 @@ const PATTERNS: &[Pattern] = &[
     Pattern("される", "する", Out::Set(OUT_VS), "passive causative"),
     Pattern("れる", "る", Out::Set(OUT_V1), "potential"),
     Pattern("[a]す", "[u]", Out::Row, "causative"),
-    // Short-causative peel (かかす→かかる): §5's かかされる chain
-    // needs it; the written via-かかせる hop is unreachable by any
-    // suffix rule, so this inverts the す-affix directly.
-    Pattern("す", "る", Out::Set(OUT_GODAN), "causative"),
+    // Short-causative peel for a-stem godan-る verbs
+    // (かかす→かかる): §5's かかされる chain needs it, and the
+    // plain す→る inversion over-fires (てす→てる). The stem row
+    // can't name the class (かかる is V5r, not V5k), so the
+    // dictionary form's own row does: V5r, its only class.
+    Pattern("[a]す", "[a]る", Out::RowSet(&[Class::V5r]), "causative"),
     Pattern("じられる", "ずる", Out::Set(OUT_VZ), "potential / passive"),
     Pattern("じさせる", "ずる", Out::Set(OUT_VZ), "causative"),
     // F. Volitional / imperative / directives.
@@ -384,9 +390,10 @@ const PATTERNS: &[Pattern] = &[
 
 /// `from` ending → rules, longest-`from`-first (table order breaks
 /// ties, so the doc's first-listed reason wins first discovery).
-/// Construction asserts the §4 shape: 376 rules (374 tabled plus
-/// the ならない obligation strip §5 needs and the す short-
-/// causative peel its かかされる chain needs), non-empty `from`
+/// Construction asserts the §4 shape: 382 rules (372 tabled plus
+/// the ならない obligation strip §5 needs and the short-causative
+/// す peel — now expanded over its godan row — its かかされる
+/// chain needs), non-empty `from`
 /// suffixes, every rule in exactly its ending bucket.
 static BUCKETS: LazyLock<HashMap<char, Vec<Rule>>> = LazyLock::new(|| {
     let mut buckets: HashMap<char, Vec<Rule>> = HashMap::new();
@@ -429,9 +436,15 @@ static BUCKETS: LazyLock<HashMap<char, Vec<Rule>>> = LazyLock::new(|| {
                     push(f, t, ClassSet::of(&[class]), reason, true);
                 }
             }
+            Out::RowSet(classes) => {
+                for (_, row) in ROWS {
+                    let (f, t) = expand_row(from, to, row);
+                    push(f, t, ClassSet::of(classes), reason, true);
+                }
+            }
         }
     }
-    assert_eq!(total, 376, "deinflect: rule count drifted from the doc");
+    assert_eq!(total, 382, "deinflect: rule count drifted from the doc");
     for rules in buckets.values_mut() {
         rules.sort_by(|a, b| {
             b.from
@@ -474,9 +487,9 @@ mod table_tests {
 
     #[test]
     fn table_matches_doc_shape() {
-        // §4: ≈375 rules, every rule in exactly the bucket keyed by
+        // §4: 382 rules, every rule in exactly the bucket keyed by
         // its `from` ending.
-        assert_eq!(rule_count(), 376);
+        assert_eq!(rule_count(), 382);
         for (last, rules) in BUCKETS.iter() {
             for rule in rules {
                 assert_eq!(rule.from.chars().next_back(), Some(*last));
