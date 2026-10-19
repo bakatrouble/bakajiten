@@ -1,4 +1,4 @@
-# bakajiten — 0.1.0
+# bakajiten — 0.1.1
 
 Japanese dictionary lookup with handwriting recognition — a Qt
 Widgets desktop app on a Rust backend.
