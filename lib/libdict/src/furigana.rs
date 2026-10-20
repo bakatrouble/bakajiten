@@ -15,8 +15,10 @@ pub struct FuriganaSpan {
 }
 
 /// Segments a headword against its reading, or `None` when the pair
-/// does not align (ateji, phrases) — and when the head needs no ruby
-/// at all (kana-only): both render as the plain heading.
+/// does not align (ateji, mismatched phrases) — and when the head
+/// needs no ruby at all (kana-only): both render as the plain heading.
+/// CJK punctuation aligns literally, so multi-part phrases segment
+/// per part.
 pub fn segment(head: &str, reading: &str) -> Option<Vec<FuriganaSpan>> {
     if head.is_empty() || reading.is_empty() {
         return None;
@@ -48,6 +50,20 @@ fn align(
     if i >= head.len() || j >= reading.len() || dead.contains(&(i, j)) {
         return false;
     }
+    // Punctuation aligns literally (proverbs, phrases: 、 takes
+    // the same slot on both sides). Must precede the kanji branch
+    // so 、 never joins a kanji run.
+    if is_punct(head[i]) && head[i] == reading[j] {
+        out.push(FuriganaSpan {
+            text: head[i].to_string(),
+            ruby: String::new(),
+        });
+        if align(head, i + 1, reading, j + 1, out, dead) {
+            return true;
+        }
+        out.pop();
+        return false;
+    }
     // Literal kana run (folded compare): maximal, deterministic.
     if is_kana(head[i]) && fold(head[i]) == fold(reading[j]) {
         let mut k = 0;
@@ -70,10 +86,11 @@ fn align(
     }
     // Kanji run takes a reading slice: try every split point (the
     // slice ends where the rest still aligns — backtracking covers
-    // repeated-kana ambiguity).
-    if !is_kana(head[i]) {
+    // repeated-kana ambiguity). Punctuation never joins the run;
+    // a lone misaligned 、 fails below.
+    if !is_kana(head[i]) && !is_punct(head[i]) {
         let mut k = 0;
-        while i + k < head.len() && !is_kana(head[i + k]) {
+        while i + k < head.len() && !is_kana(head[i + k]) && !is_punct(head[i + k]) {
             k += 1;
         }
         for m in 1..=reading.len() - j {
@@ -98,6 +115,25 @@ fn align(
 
 fn is_kana(c: char) -> bool {
     matches!(c, '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}' | '\u{ff61}'..='\u{ff9f}')
+}
+
+/// CJK punctuation aligns literally on both sides (proverbs and
+/// multi-part phrases). Anything outside this set still fails the
+/// pair — exact match only, no folding across variants.
+fn is_punct(c: char) -> bool {
+    matches!(c,
+        '\u{3001}' | '\u{3002}' | // 、。
+        '\u{ff01}' | '\u{ff1f}' | // ！？
+        '\u{300c}' | '\u{300d}' | // 「」
+        '\u{300e}' | '\u{300f}' | // 『』
+        '\u{3008}' | '\u{3009}' | // 〈〉
+        '\u{300a}' | '\u{300b}' | // 《》
+        '\u{3010}' | '\u{3011}' | // 【】
+        '\u{ff08}' | '\u{ff09}' | // （）
+        '\u{ff1a}' | '\u{ff1b}' | // ：；
+        '\u{2026}' | '\u{2025}' | // …‥
+        '\u{301c}' | '\u{ff5e}' // 〜～
+    )
 }
 
 /// Full-width katakana reads as hiragana (ガリ勉/がりべん).
@@ -169,5 +205,22 @@ mod tests {
         assert_eq!(texts("食べる", "のむ"), None);
         assert_eq!(texts("", "たべる"), None);
         assert_eq!(texts("食べる", ""), None);
+        // Punctuation aligns literally, per part.
+        assert_eq!(
+            texts("合うも不思議、合わぬも不思議", "あうもふしぎ、あわぬもふしぎ"),
+            Some(vec![
+                "合/あ".into(),
+                "うも/".into(),
+                "不思議/ふしぎ".into(),
+                "、/".into(),
+                "合/あ".into(),
+                "わぬも/".into(),
+                "不思議/ふしぎ".into()
+            ])
+        );
+        // Misaligned punctuation still fails.
+        assert_eq!(texts("食べる、", "たべる"), None);
+        assert_eq!(texts("食べる", "たべる、"), None);
+        assert_eq!(texts("食べる。", "たべる、"), None);
     }
 }
