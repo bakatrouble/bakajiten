@@ -1,0 +1,4 @@
+[submodule "frontends/web"]
+	path = frontends/web
+	url = git@github.com:bakatrouble/bakajiten-web.git
+	branch = master
