@@ -45,9 +45,11 @@ cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
     --kokugo dataimports/kokugo/kokugo.jsonl --kokugo-out data/kokugo.bin
 ```
 
-Desktop app (Qt6, C++26, `uniffi-bindgen-cpp` on PATH, system yaml-cpp):
+Desktop app (Qt6, C++26, `uniffi-bindgen-cpp` on PATH, system yaml-cpp;
+clone with submodules so `frontends/qt` is present):
 
 ```sh
+git clone --recurse-submodules git@github.com:bakatrouble/bakajiten.git
 cmake -S frontends/qt -B frontends/qt/build
 cmake --build frontends/qt/build
 cd frontends/qt && ./build/bakajiten
@@ -75,7 +77,7 @@ follow [zkanji](https://github.com/z1dev/zkanji) by Sólyom Zoltán.
 librecognizer/   classical handwriting matcher (trajectories, DTW, layout, rank)
 libdict/         dictionary storage + lookup, UniFFI boundary
 utils/           data pipeline: fetch-data (incl. kokugo import), pack-data
-frontends/qt/     Qt Widgets desktop app (bakajiten binary)
+frontends/qt/     Qt Widgets desktop app (bakajiten-qt submodule)
 dataimports/     bulk sources (not in git)
 data/            packed artifacts (not in git)
 ```

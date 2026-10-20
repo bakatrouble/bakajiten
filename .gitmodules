@@ -2,3 +2,7 @@
 	path = frontends/web
 	url = git@github.com:bakatrouble/bakajiten-web.git
 	branch = master
+[submodule "frontends/qt"]
+	path = frontends/qt
+	url = git@github.com:bakatrouble/bakajiten-qt.git
+	branch = master
