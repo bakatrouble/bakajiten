@@ -15,7 +15,7 @@ use crate::gloss::search::{ArchivedDictionaryFile, SearchType};
 use crate::gloss::sort_hits;
 use crate::gloss::{
     ArchivedDictIndex, GLOSS_JMDICT_MAGIC, GLOSS_JMNEDICT_MAGIC, GLOSS_KOKUGO_MAGIC, decode_entry,
-    deinflect, entry_classes, gloss_header,
+    deinflect, entry_classes, gloss_header, gloss_view,
 };
 use crate::kanji::{ArchivedKanjiFile, kanji_header};
 
@@ -374,6 +374,45 @@ fn check_artifact(bytes: &[u8]) -> Result<bool, String> {
 /// exact-length gate first).
 fn index_bytes(bytes: &[u8]) -> &[u8] {
     crate::gloss::index_section(bytes).expect("header checked")
+}
+
+/// Source version stamp of one gloss artifact on disk (`GLD1`
+/// words, `GLN1` names, or `GLK1` kokugo): the `DictIndex.version`
+/// packed at build time (JMdict/JMnedict date or mtime), read
+/// zero-copy off the mapping. Lets the Android dictionary manager
+/// show the saved version without opening a search handle.
+#[uniffi::export]
+pub fn gloss_version(path: String) -> Result<String, DictError> {
+    let invalid = |message: String| DictError::InvalidArtifact { message };
+    let bytes = Artifact::load(&path).map_err(invalid)?;
+    let bytes = bytes.as_slice();
+    let magic = [GLOSS_JMDICT_MAGIC, GLOSS_JMNEDICT_MAGIC, GLOSS_KOKUGO_MAGIC]
+        .into_iter()
+        .find(|m| bytes.get(..4) == Some(m.as_slice()))
+        .ok_or_else(|| invalid("gloss: missing magic (want GLD1, GLN1, or GLK1)".to_string()))?;
+    let view = gloss_view(bytes, magic).map_err(invalid)?;
+    Ok(view.index.version.as_str().to_owned())
+}
+
+/// Source versions stamped into `kanji.bin`: kanjidic2
+/// `<date_of_creation>` plus the KanjiVG marker.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct KanjiVersions {
+    pub kanjidic2: String,
+    pub kanjivg: String,
+}
+
+/// Saved versions of one kanji artifact on disk, read zero-copy off
+/// the mapping (same use as [`gloss_version`]).
+#[uniffi::export]
+pub fn kanji_versions(path: String) -> Result<KanjiVersions, DictError> {
+    let invalid = |message: String| DictError::InvalidArtifact { message };
+    let bytes = Artifact::load(&path).map_err(invalid)?;
+    let file = crate::kanji::kanji_view(bytes.as_slice()).map_err(invalid)?;
+    Ok(KanjiVersions {
+        kanjidic2: file.kanjidic2_version.as_str().to_owned(),
+        kanjivg: file.kanjivg_version.as_str().to_owned(),
+    })
 }
 
 /// Opaque kanji dictionary: `KJD1` artifact with lookup by

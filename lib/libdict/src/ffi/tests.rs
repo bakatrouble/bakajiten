@@ -321,6 +321,25 @@ fn toy_kanji() -> Vec<u8> {
 }
 
 #[test]
+fn ffi_gloss_version_reads_packed_stamp() {
+    assert_eq!(gloss_version(toy_words_path()).unwrap(), "t");
+}
+
+#[test]
+fn ffi_gloss_version_rejects_missing_file() {
+    assert!(gloss_version("/nonexistent/bakajiten-version-test.bin".into()).is_err());
+}
+
+#[test]
+fn ffi_kanji_versions_read_packed_stamps() {
+    let path = std::env::temp_dir().join("ffi-test-kanji-versions.bin");
+    std::fs::write(&path, toy_kanji()).unwrap();
+    let v = kanji_versions(path.to_str().unwrap().into()).unwrap();
+    assert_eq!(v.kanjidic2, "t");
+    assert_eq!(v.kanjivg, "t");
+}
+
+#[test]
 fn ffi_search_finds_prefix_hits_with_content() {
     let d = toy_words();
     assert_eq!(d.count(), 2);

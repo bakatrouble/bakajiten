@@ -78,6 +78,33 @@ pub enum RecognizerError {
     EmptyBank,
 }
 
+/// Pack timestamp (`packed_at`, unix seconds) of a `templates.bin`
+/// on disk: 16-byte header read only, no model decode. Lets the
+/// Android dictionary manager show the saved version.
+#[uniffi::export]
+pub fn templates_packed_at(path: String) -> Result<u64, RecognizerError> {
+    use crate::model::{TEMPLATES_MAGIC, TEMPLATES_VERSION};
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    std::fs::File::open(&path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .map_err(|e| RecognizerError::InvalidModel {
+            message: format!("{path}: {e}"),
+        })?;
+    if &head[..4] != TEMPLATES_MAGIC {
+        return Err(RecognizerError::InvalidModel {
+            message: format!("{path}: missing magic (want KTT1)"),
+        });
+    }
+    let version = u32::from_le_bytes(head[4..8].try_into().expect("4-byte slice"));
+    if version != TEMPLATES_VERSION {
+        return Err(RecognizerError::InvalidModel {
+            message: format!("{path}: unsupported version {version}"),
+        });
+    }
+    Ok(u64::from_le_bytes(head[8..16].try_into().expect("8-byte slice")))
+}
+
 /// Opaque recognizer: a template bank built once from model bytes.
 #[derive(Debug, uniffi::Object)]
 pub struct Recognizer {
@@ -173,6 +200,17 @@ mod ffi_tests {
     use crate::model::{build_templates, templates_to_bytes, ModelEntry};
 
     const STAMP: u64 = 1_700_000_000;
+
+    #[test]
+    fn ffi_templates_packed_at_reads_header_only() {
+        let path = std::env::temp_dir().join("ffi-test-templates-packed-at.bin");
+        std::fs::write(&path, toy_model()).unwrap();
+        assert_eq!(
+            templates_packed_at(path.to_str().unwrap().into()).unwrap(),
+            STAMP
+        );
+        assert!(templates_packed_at("/nonexistent/bakajiten-templates-test.bin".into()).is_err());
+    }
 
     fn toy_model() -> Vec<u8> {
         let h = ModelEntry {
