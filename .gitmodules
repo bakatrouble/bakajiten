@@ -6,3 +6,7 @@
 	path = frontends/qt
 	url = git@github.com:bakatrouble/bakajiten-qt.git
 	branch = master
+[submodule "frontends/android"]
+	path = frontends/android
+	url = git@github.com:bakatrouble/bakajiten-android.git
+	branch = master
