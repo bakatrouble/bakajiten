@@ -126,6 +126,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fetch_raw(&dest, src.url)?;
         }
     }
+    if wanted.contains("kokugo") {
+        stamp_kokugo_sources(&args.out_dir)?;
+    }
     if wanted.contains("kanjivg") {
         let dir = args.out_dir.join("kanjivg");
         std::fs::create_dir_all(&dir)?;
@@ -222,6 +225,85 @@ fn all_zip_asset(tag: &str) -> Result<String, Box<dyn std::error::Error>> {
         .rfind("/KanjiVG/kanjivg/releases/download/")
         .ok_or("malformed KanjiVG asset link")?;
     Ok(format!("https://github.com{}", &html[start..end]))
+}
+
+/// Source dates for the kokugo stamp (`kokugo-sources.json` in
+/// the out dir): the kaikki "extracted on" date from the rawdata
+/// page and the WordNet XML update date from GitHub. Aux failures
+/// warn and record null (pack falls back per-side, then to the
+/// content hash) — a flaky metadata endpoint must not fail the
+/// whole fetch.
+fn stamp_kokugo_sources(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let kaikki = match kaikki_extracted_date() {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("warning: kaikki extract date: {e}");
+            None
+        }
+    };
+    let wnja = match wnja_updated_date() {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("warning: WordNet update date: {e}");
+            None
+        }
+    };
+    let stamp = serde_json::json!({
+        "kaikki_extracted": kaikki,
+        "wnja_updated": wnja,
+    });
+    std::fs::write(
+        dir.join("kokugo-sources.json"),
+        serde_json::to_string_pretty(&stamp)?,
+    )?;
+    println!("kokugo sources: {stamp}");
+    Ok(())
+}
+
+/// First `YYYY-MM-DD` after a marker in fetched text.
+fn date_after(text: &str, marker: &str) -> Option<String> {
+    let i = text.find(marker)? + marker.len();
+    let date = text.get(i..i + 10)?;
+    let b = date.as_bytes();
+    if b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && date[..4].bytes().all(|c| c.is_ascii_digit())
+        && date[5..7].bytes().all(|c| c.is_ascii_digit())
+        && date[8..].bytes().all(|c| c.is_ascii_digit())
+    {
+        Some(date.to_string())
+    } else {
+        None
+    }
+}
+
+fn kaikki_extracted_date() -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut html = String::new();
+    ureq::get("https://kaikki.org/jawiktionary/rawdata.html")
+        .call()?
+        .body_mut()
+        .as_reader()
+        .read_to_string(&mut html)?;
+    date_after(&html, "extracted on ")
+        .ok_or_else(|| "no 'extracted on YYYY-MM-DD' on kaikki rawdata page".into())
+}
+
+fn wnja_updated_date() -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut body = String::new();
+    ureq::get("https://api.github.com/repos/bond-lab/wnja/commits?path=data/wn-ntumc-jpn.xml&per_page=1")
+        .header("User-Agent", "bakajiten-fetch-data")
+        .header("Accept", "application/vnd.github+json")
+        .call()?
+        .body_mut()
+        .as_reader()
+        .read_to_string(&mut body)?;
+    // Newest commit touching the path first: its committer date.
+    date_after(&body, "\"date\": \"")
+        .or_else(|| date_after(&body, "\"date\":\""))
+        .ok_or_else(|| "no commit date in wnja commits response".into())
 }
 
 /// Fetch one kokugo source (skips present files; `.gz` must sniff

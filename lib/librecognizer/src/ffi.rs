@@ -105,6 +105,19 @@ pub fn templates_packed_at(path: String) -> Result<u64, RecognizerError> {
     Ok(u64::from_le_bytes(head[8..16].try_into().expect("8-byte slice")))
 }
 
+/// Fractional stroke reveal for players (arc-length + interpolated
+/// tip): constant drawing speed regardless of point density.
+#[uniffi::export]
+pub fn stroke_slice(points: Vec<StrokePoint>, fraction: f32) -> Vec<StrokePoint> {
+    crate::geometry::stroke_slice(
+        &points.into_iter().map(Point::from).collect::<Vec<_>>(),
+        fraction,
+    )
+    .into_iter()
+    .map(|p| StrokePoint { x: p.x, y: p.y })
+    .collect()
+}
+
 /// Opaque recognizer: a template bank built once from model bytes.
 #[derive(Debug, uniffi::Object)]
 pub struct Recognizer {

@@ -41,4 +41,7 @@ pub use crate::furigana::FuriganaSpan;
 pub use crate::kanji::display::GradeKind;
 pub use crate::romaji::RomajiStyle;
 pub use objects::{Dictionary, KanjiDictionary};
-pub use records::{Deinflection, DictEntry, DictError, DictSense, KanjiEntry, SearchHit};
+pub use records::{
+    Deinflection, DictEntry, DictError, DictSense, KanjiDetailRow, KanjiDetailKey, KanjiEntry,
+    MatchRange, SearchHit, ShapedSense, ShapedSource, ShapedTag, TagKind,
+};

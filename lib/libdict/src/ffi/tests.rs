@@ -256,9 +256,13 @@ fn toy_names() -> Arc<Dictionary> {
 }
 
 /// Same toy words via a temp file (the Qt path-constructor flow).
+/// Fresh path per call: parallel tests must never share one file.
 fn toy_words_path() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir();
-    let words = dir.join("ffi-test-words.bin");
+    let words = dir.join(format!("ffi-test-words-{n}.bin"));
     std::fs::write(&words, indexed_words()).unwrap();
     words.to_str().unwrap().into()
 }
@@ -337,6 +341,29 @@ fn ffi_kanji_versions_read_packed_stamps() {
     let v = kanji_versions(path.to_str().unwrap().into()).unwrap();
     assert_eq!(v.kanjidic2, "t");
     assert_eq!(v.kanjivg, "t");
+}
+
+#[test]
+fn ffi_kanji_version_reports_latest_date() {
+    use crate::kanji::KanjiFile;
+    let stamp = |kanjivg: &str, kanjidic2: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "ffi-test-kanji-version-{kanjivg}-{kanjidic2}.bin",
+            kanjivg = kanjivg.replace('/', "_"),
+            kanjidic2 = kanjidic2.replace('/', "_"),
+        ));
+        let file = KanjiFile {
+            kanjivg_version: kanjivg.into(),
+            kanjidic2_version: kanjidic2.into(),
+            records: vec![],
+        };
+        std::fs::write(&path, crate::kanji::kanji_to_bytes(&file)).unwrap();
+        kanji_version(path.to_str().unwrap().into()).unwrap()
+    };
+    assert_eq!(stamp("2026-07-14", "2026-10-10"), "2026-10-10");
+    assert_eq!(stamp("2026-10-10", "2026-07-14"), "2026-10-10");
+    assert_eq!(stamp("unknown", "2026-10-10"), "2026-10-10");
+    assert_eq!(stamp("unknown", "unknown"), "unknown");
 }
 
 #[test]

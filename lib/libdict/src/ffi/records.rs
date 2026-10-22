@@ -427,3 +427,105 @@ impl From<&ArchivedKanjiRecord> for KanjiEntry {
         }
     }
 }
+
+/// Tag group for one shaped badge (parallel to the label tables).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TagKind {
+    Pos,
+    Field,
+    Misc,
+}
+
+/// One display badge: abbreviated label (`vt`, or `kana` for the
+/// `uk` tag) plus its description tip.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ShapedTag {
+    pub label: String,
+    pub tip: String,
+    pub kind: TagKind,
+}
+
+/// One source-language attestation, passed through for display.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ShapedSource {
+    pub lang: Option<String>,
+    pub text: String,
+}
+
+/// One display-shaped sense: tag groups plus texts. Groups stay
+/// separate (pos/field/misc) — row order (pos/field/misc/gloss on
+/// Android+web vs pos/misc/gloss/field on Qt) stays trackside
+/// presentation, not shaping.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ShapedSense {
+    /// 1-based original sense number (gaps stay visible).
+    pub n: u32,
+    pub pos: Vec<ShapedTag>,
+    pub field: Vec<ShapedTag>,
+    pub misc: Vec<ShapedTag>,
+    pub glosses: Vec<String>,
+    pub xref: Vec<String>,
+    pub ant: Vec<String>,
+    pub info: Vec<String>,
+    pub sources: Vec<ShapedSource>,
+    /// Kanji forms this sense is restricted to.
+    pub restricted_kanji: Vec<String>,
+    /// Readings this sense is restricted to.
+    pub restricted_reading: Vec<String>,
+    /// Usually written in kana alone (first-sense `uk` tag: badge
+    /// reads "kana").
+    pub uk: bool,
+}
+
+/// Query-match span for highlight: UTF-16 code-unit start+length,
+/// ready for Kotlin/JS/Qt spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct MatchRange {
+    pub start: u32,
+    pub len: u32,
+}
+
+/// One kanji detail table row: stable key plus the preformatted
+/// value. Labels stay trackside (Qt translates captions) —
+/// frontends map the key. Row order is the desktop dialog order
+/// (Android/web); Qt reorders to match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum KanjiDetailKey {
+    Meaning,
+    On,
+    Kun,
+    Nanori,
+    Chinese,
+    Korean,
+    Vietnamese,
+    Strokes,
+    Grade,
+    Jlpt,
+    Frequency,
+    Radical,
+    RadicalNames,
+    Unicode,
+    Jis0208,
+    Jis0212,
+    Jis0213,
+    Jis0208Refs,
+    Skip,
+    FourCorner,
+    Deroo,
+    ShDesc,
+    Nelson,
+    Njecd,
+    Oneill,
+    DerooVariant,
+    ShRefs,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct KanjiDetailRow {
+    pub key: KanjiDetailKey,
+    /// English caption ("Meaning", "ON", …). Qt maps the key to its
+    /// own translations instead.
+    pub label: String,
+    /// Preformatted value ("-" when the source carries nothing).
+    pub value: String,
+}

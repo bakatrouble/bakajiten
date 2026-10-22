@@ -74,10 +74,31 @@ pub(super) fn pack_jmnedict(
 /// strip. Like the XML packs, converters fail loudly on unknown
 /// entities and the file is verified with a decode roundtrip
 /// before writing.
+/// Source-date stamp written by fetch-data next to the kokugo
+/// inputs (`--kokugo-versions`): extraction/update ISO dates of
+/// the two origins. Unknown sides are null.
+#[derive(serde::Deserialize)]
+struct KokugoSources {
+    kaikki_extracted: Option<String>,
+    wnja_updated: Option<String>,
+}
+
+/// Latest known source date from a fetch-data stamp file (kaikki
+/// extract vs WordNet update). `None` when the file is absent or
+/// both sides are unknown — the caller falls back to the content
+/// hash.
+fn kokugo_source_date(path: Option<&std::path::Path>) -> Option<String> {
+    let path = path?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let stamp: KokugoSources = serde_json::from_str(&raw).ok()?;
+    dict::kanji::version::latest_date(stamp.kaikki_extracted.as_deref(), stamp.wnja_updated.as_deref())
+}
+
 pub(super) fn pack_kokugo(
     kaikki: &std::path::Path,
     wordnet: &std::path::Path,
     out: &std::path::Path,
+    versions: Option<&std::path::Path>,
     jlpt: &JlptIndex,
     backfill: Option<&std::path::Path>,
 ) -> Result<super::Summary, Box<dyn std::error::Error>> {
@@ -85,19 +106,26 @@ pub(super) fn pack_kokugo(
     // counters as the retired standalone importer, minus the JSONL
     // file that used to sit between import and pack).
     let lines = super::kokugo::run(kaikki, wordnet)?;
-    // Source version: FNV-1a over the imported lines. The mtime
+    // Source version: latest of the two origin dates (kaikki
+    // extract vs WordNet update). The content-hash fallback keeps
+    // unstamped pipelines stable: FNV-1a over the imported lines
+    // (stable exactly when the input is; FNV, not SipHash — the std
+    // hasher is explicitly unstable across toolchains). The mtime
     // fallback would churn every run (fresh fetch) and defeat
-    // identical-output skips; a content hash is stable exactly when
-    // the input is. (FNV, not SipHash: the std hasher is explicitly
-    // unstable across toolchains.)
-    let mut h: u64 = 0xcbf29ce484222325;
-    for line in &lines {
-        for &b in line.as_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001b3);
+    // identical-output skips.
+    let version = match kokugo_source_date(versions) {
+        Some(date) => date,
+        None => {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for line in &lines {
+                for &b in line.as_bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+            }
+            format!("kokugo-{h:016x}")
         }
-    }
-    let version = format!("kokugo-{h:016x}");
+    };
     // Reading backfill: reb-less entries take the JMdict reading when
     // exactly one exists across all keb.
     let jmap = match backfill {
@@ -351,4 +379,41 @@ fn source_version(xml: &std::path::Path, parsed: Option<String>) -> String {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs().to_string())
         .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kokugo_source_date;
+
+    fn stamp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let path = dir.join(format!("kokugo-sources-{}.json", body.len()));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn kokugo_stamp_takes_latest_date() {
+        let dir = std::env::temp_dir();
+        let stamped = |kaikki: &str, wnja: &str| {
+            let p = stamp(&dir, &format!(r#"{{"kaikki_extracted":{kaikki},"wnja_updated":{wnja}}}"#));
+            kokugo_source_date(Some(&p))
+        };
+        assert_eq!(
+            stamped(r#""2026-10-20""#, r#""2026-09-01""#),
+            Some("2026-10-20".to_string())
+        );
+        assert_eq!(
+            stamped(r#""2026-09-01""#, r#""2026-10-20""#),
+            Some("2026-10-20".to_string())
+        );
+        assert_eq!(stamped("null", r#""2026-09-01""#), Some("2026-09-01".to_string()));
+        // No stamp, garbage stamp, or no known dates: hash fallback.
+        assert_eq!(kokugo_source_date(None), None);
+        assert_eq!(
+            kokugo_source_date(Some(&stamp(&dir, "not json"))),
+            None
+        );
+        assert_eq!(stamped("null", "null"), None);
+        assert_eq!(stamped(r#""garbage""#, "null"), None);
+    }
 }

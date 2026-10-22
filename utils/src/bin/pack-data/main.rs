@@ -69,6 +69,11 @@ struct Args {
     /// the JMdict reading when exactly one exists across all keb)
     #[arg(long)]
     jmdict_backfill: Option<PathBuf>,
+    /// Kokugo source-date stamp from fetch-data (`kokugo-sources.json`:
+    /// kaikki extract + WordNet update ISO dates). Absent sides fall
+    /// back to the content hash.
+    #[arg(long)]
+    kokugo_versions: Option<PathBuf>,
     /// Monolingual-dictionary record file
     #[arg(long)]
     kokugo_out: Option<PathBuf>,
@@ -119,12 +124,20 @@ fn packed_at() -> u64 {
         .unwrap_or(0)
 }
 
-/// KanjiVG source version (`version.txt` in the checkout, else
-/// "unknown": checkouts carry no other marker).
+/// KanjiVG source version (`version.txt` release tag, normalized
+/// to an ISO date, else "unknown": checkouts carry no other
+/// marker).
 fn kanjivg_version(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join("version.txt"))
-        .map(|s| s.trim().to_owned())
-        .unwrap_or_else(|_| "unknown".into())
+    let raw = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_else(|_| "unknown".into());
+    dict::kanji::version::kanjivg_release_date(&raw).unwrap_or_else(|| "unknown".into())
+}
+
+/// Templates stamp: the KanjiVG release date (not pack time), so
+/// the saved version matches the manifest provenance exactly.
+/// Falls back to pack time when `version.txt` is missing/garbage.
+fn kanjivg_stamp(dir: &std::path::Path) -> u64 {
+    let version = kanjivg_version(dir);
+    dict::kanji::version::iso_date_epoch(&version).unwrap_or_else(packed_at)
 }
 
 /// File count for the load bar: `.svg` files in a directory, else 1
@@ -177,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if let (Some(entries), Some(out)) = (&parsed, &args.templates_out) {
         let dir = args.kanjivg.as_deref().expect("checked above");
-        let summary = templates::pack(entries, out, packed_at(), kanjivg_version(dir))?;
+        let summary = templates::pack(entries, out, kanjivg_stamp(dir), kanjivg_version(dir))?;
         print_summary(&summary, args.json);
     }
     if let (Some(entries), Some(kanjidic), Some(out)) = (&parsed, &args.kanjidic, &args.kanji_out) {
@@ -203,7 +216,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let (Some(kaikki), Some(wordnet), Some(out)) = (&args.kokugo, &args.wordnet, &args.kokugo_out) {
         let jlpt = load_jlpt(&args.jlpt)?;
-        let summary = gloss::pack_kokugo(kaikki, wordnet, out, &jlpt, args.jmdict_backfill.as_deref())?;
+        let summary = gloss::pack_kokugo(
+            kaikki,
+            wordnet,
+            out,
+            args.kokugo_versions.as_deref(),
+            &jlpt,
+            args.jmdict_backfill.as_deref(),
+        )?;
         print_summary(&summary, args.json);
     }
     Ok(())

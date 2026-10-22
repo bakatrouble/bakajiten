@@ -1,5 +1,6 @@
 pub mod deinflect;
 pub mod deinflect_table;
+pub mod display;
 pub mod field;
 pub mod file;
 pub mod gloss_type;

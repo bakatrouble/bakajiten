@@ -80,12 +80,21 @@ cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
     --kanjidic dataimports/kanjidic2.xml --kanji-out data/kanji.bin \
     --jmdict dataimports/JMdict.xml --jmdict-out data/jmdict.bin \
     --jmnedict dataimports/JMnedict.xml --jmnedict-out data/jmnedict.bin \
-    --kokugo dataimports/kokugo/kokugo.jsonl --kokugo-out data/kokugo.bin
+    --kokugo dataimports/kokugo/kokugo.jsonl --kokugo-out data/kokugo.bin \
+    --kokugo-versions dataimports/kokugo-sources.json
 ```
 
 - JLPT levels come from vendored `dataimports/jlpt.csv` (tanos.co.uk,
   CC-BY); pass via `pack-data --jlpt`.
 - Each pack output is independent and roundtrip-verified at write time.
+- Versions are ISO dates everywhere: KanjiVG `version.txt`
+  (`r20260714`) parses to the date at pack; templates stamps the
+  KanjiVG release date (not pack time); kanji stamps the latest of
+  KanjiVG/kanjidic2 (new `kanji_version` UniFFI export); kokugo
+  stamps the latest of the kaikki extract date and the WordNet
+  update date (fetch-data writes `kokugo-sources.json`, new
+  `--kokugo-versions` flag; content-hash fallback when unstamped).
+  The manifest `version` strings come straight from these.
 - Sources/licenses: EDRDG (JMdict/JMnedict/kanjidic2/radkfile),
   KanjiVG, kradfile, kaikki jawiktionary (CC-BY-SA 4.0) + Japanese
   WordNet (CC-BY 4.0) for kokugo.

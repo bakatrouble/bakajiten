@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use super::records::{
-    Deinflection, DictEntry, DictError, KanjiEntry, KanjiPoint, KanjiStroke, SearchHit, SearchMode,
+    Deinflection, DictEntry, DictError, KanjiEntry, KanjiPoint, KanjiStroke, MatchRange, SearchHit,
+    SearchMode, ShapedSense,
 };
 use crate::furigana::FuriganaSpan;
 use crate::gloss::field::Field;
@@ -415,6 +416,30 @@ pub fn kanji_versions(path: String) -> Result<KanjiVersions, DictError> {
     })
 }
 
+/// Single date version of one kanji artifact: the latest of the
+/// KanjiVG release and kanjidic2 creation stamps (`unknown` when
+/// neither parses). Lets the Android dictionary manager show one
+/// saved version instead of two provenance strings.
+#[uniffi::export]
+pub fn kanji_version(path: String) -> Result<String, DictError> {
+    let invalid = |message: String| DictError::InvalidArtifact { message };
+    let bytes = Artifact::load(&path).map_err(invalid)?;
+    let file = crate::kanji::kanji_view(bytes.as_slice()).map_err(invalid)?;
+    Ok(crate::kanji::version::kanji_version(
+        file.kanjivg_version.as_str(),
+        file.kanjidic2_version.as_str(),
+    ))
+}
+
+/// One kanji detail table, compiled once for all frontends: stable
+/// key plus preformatted value per row in desktop dialog order.
+/// Qt maps keys to translated captions; Android/web render the
+/// English labels directly.
+#[uniffi::export]
+pub fn kanji_details(entry: KanjiEntry) -> Vec<crate::ffi::records::KanjiDetailRow> {
+    crate::kanji::display::kanji_details(&entry)
+}
+
 /// Opaque kanji dictionary: `KJD1` artifact with lookup by
 /// character.
 #[derive(Debug, uniffi::Object)]
@@ -696,4 +721,58 @@ pub fn romaji_has_pending(raw: String) -> bool {
 #[uniffi::export]
 pub fn pinyin_marked(text: String) -> String {
     crate::pinyin::to_marked(&text)
+}
+
+/// Display shaping, unified from the Android (`domain/Labels.kt`),
+/// web (`labels.ts`), and Qt (`DictionaryModel::displaySenses`)
+/// copies: entity labels abbreviated with description tips, `uk`
+/// as a `kana` badge, groups kept separate (pos/field/misc) —
+/// trackside code keeps its row order.
+#[uniffi::export]
+pub fn display_senses(entry: DictEntry) -> Vec<ShapedSense> {
+    crate::gloss::display::shaped_senses(&entry)
+}
+
+/// Entry is usually written in kana alone (first content sense's
+/// `uk` tag).
+#[uniffi::export]
+pub fn is_kana_entry(entry: DictEntry) -> bool {
+    crate::gloss::display::is_kana_entry(&entry)
+}
+
+/// Common-word badge: news/ichi priorities on any form.
+#[uniffi::export]
+pub fn is_common_word(entry: DictEntry) -> bool {
+    crate::gloss::display::is_common_word(&entry)
+}
+
+/// Heading preferring the kanji spelling containing the query.
+#[uniffi::export]
+pub fn prefer_keb(entry: DictEntry, query: String) -> String {
+    crate::gloss::display::prefer_keb(&entry, &query)
+}
+
+/// Reading preferring the spelling containing the query.
+#[uniffi::export]
+pub fn prefer_reb(entry: DictEntry, query: String) -> String {
+    crate::gloss::display::prefer_reb(&entry, &query)
+}
+
+/// First index of the query in the text as UTF-16 start+length
+/// (`None` for empty/missing queries).
+#[uniffi::export]
+pub fn match_range(text: String, query: String) -> Option<MatchRange> {
+    crate::gloss::display::match_range(&text, &query)
+}
+
+/// Drop a numeric ・n tail from cross-reference queries.
+#[uniffi::export]
+pub fn query_for(term: String) -> String {
+    crate::gloss::display::query_for(&term)
+}
+
+/// First gloss of the first sense (row preview).
+#[uniffi::export]
+pub fn preview_gloss(entry: DictEntry) -> String {
+    crate::gloss::display::preview_gloss(&entry)
 }

@@ -10,6 +10,7 @@ pub mod codes;
 pub mod display;
 pub mod file;
 pub mod record;
+pub mod version;
 #[cfg(test)]
 mod tests;
 

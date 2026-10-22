@@ -80,6 +80,9 @@ pub(super) fn pack(
     );
     let kanjivg = super::kanjivg_version(kanjivg_dir);
     let kanjidic2 = creation_date(kanjidic).unwrap_or_else(|_| "unknown".into());
+    // Single date version: the latest of the two sources (both are
+    // ISO dates or "unknown" by construction).
+    let version = dict::kanji::version::kanji_version(&kanjivg, &kanjidic2);
     let file = KanjiFile {
         kanjivg_version: kanjivg.clone(),
         kanjidic2_version: kanjidic2.clone(),
@@ -100,7 +103,7 @@ pub(super) fn pack(
         path: out.to_path_buf(),
         records: file.records.len(),
         bytes: bytes.len(),
-        version: format!("kanjidic2 {kanjidic2} + kanjivg {kanjivg}"),
+        version,
     })
 }
 
