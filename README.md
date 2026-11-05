@@ -16,9 +16,10 @@ and double-click opens the full information dialog.
 - **Deinflection** — conjugated verbs and adjectives resolve to their
   dictionary forms with the reason chain shown (~375 rules)
 - **IME-style kana input** — romaji converts live as you type
-- **Handwriting recognition** — draw on the canvas; classical
-  trajectory matcher (Sólyom Zoltán's zkanji algorithm) ranks
-  candidates in milliseconds, no ML model
+- **Handwriting recognition** — draw on the canvas; mlkit-ink
+  (ML Kit Digital Ink Recognition, reimplemented outside the SDK)
+  decodes the ink. The Japanese pack downloads from Google via the
+  Dictionaries dialog (~15 MB) and decodes offline afterwards
 - **Kanji deep-dives** — hover cards everywhere, stroke-order diagrams
   with playback, parts/similar/part-of browsers, JLPT and grade data
 - **Offline data** — memory-mapped artifacts built from open sources;
@@ -38,7 +39,6 @@ download into `dataimports/`, packed artifacts land in `data/`):
 cargo run -p utils --bin fetch-data -- --out-dir dataimports
 cargo run --release -p utils --bin fetch-data -- --kokugo-out dataimports/kokugo/kokugo.jsonl --fetch
 cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
-    --templates-out data/templates.bin \
     --kanjidic dataimports/kanjidic2.xml --kanji-out data/kanji.bin \
     --jmdict dataimports/JMdict.xml --jmdict-out data/jmdict.bin \
     --jmnedict dataimports/JMnedict.xml --jmnedict-out data/jmnedict.bin \
@@ -65,16 +65,16 @@ for Rust.
 | [JMdict / JMnedict / KANJIDIC2](http://www.edrdg.org/) (EDRDG) | word, name, and kanji entries | CC-BY-SA |
 | [Japanese Wiktionary](https://kaikki.org/jawiktionary/rawdata.html) via kaikki | kokugo definitions | CC-BY-SA 4.0 |
 | [Japanese WordNet](https://bond-lab.github.io/wnja/) | kokugo backfill + relations | CC-BY 4.0 |
-| [KanjiVG](https://kanjivg.tagaini.net/) | stroke data + recognition templates | CC-BY-SA 3.0 |
+| [KanjiVG](https://kanjivg.tagaini.net/) | stroke data | CC-BY-SA 3.0 |
 | JLPT levels (Jonathan Waller / Tanos) | word levels | CC-BY |
 
-Recognition, inflection handling, ranking — and the interface itself —
+Inflection handling, ranking — and the interface itself —
 follow [zkanji](https://github.com/z1dev/zkanji) by Sólyom Zoltán.
 
 ## Project structure
 
 ```text
-librecognizer/   classical handwriting matcher (trajectories, DTW, layout, rank)
+librecognizer/   handwriting recognition (thin wrapper around external/mlkit-ink)
 libdict/         dictionary storage + lookup, UniFFI boundary
 utils/           data pipeline: fetch-data (incl. kokugo import), pack-data
 frontends/qt/     Qt Widgets desktop app (bakajiten-qt submodule)

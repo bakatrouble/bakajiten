@@ -59,7 +59,10 @@
 
 ## Layout
 
-- `lib/librecognizer/` — geometry, classical matcher, recognition model.
+- `lib/librecognizer/` — handwriting recognition: thin wrapper around
+  the `external/mlkit-ink` sub-repo (pen → mlkit strokes, UniFFI boundary).
+- `external/mlkit-ink/` — upstream inference engine (submodule, excluded
+  from this workspace).
 - `lib/libdict/` — dictionary storage + lookup (UniFFI).
 - `utils/` — data pipeline (`pack-data`, `fetch-data` incl. kokugo
   import, `src/parsers`).
@@ -76,7 +79,6 @@
 cargo run -p utils --bin fetch-data -- --out-dir dataimports
 cargo run --release -p utils --bin fetch-data -- --kokugo-out dataimports/kokugo/kokugo.jsonl --fetch
 cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
-    --templates-out data/templates.bin \
     --kanjidic dataimports/kanjidic2.xml --kanji-out data/kanji.bin \
     --jmdict dataimports/JMdict.xml --jmdict-out data/jmdict.bin \
     --jmnedict dataimports/JMnedict.xml --jmnedict-out data/jmnedict.bin \
@@ -87,9 +89,7 @@ cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
 - JLPT levels come from vendored `dataimports/jlpt.csv` (tanos.co.uk,
   CC-BY); pass via `pack-data --jlpt`.
 - Each pack output is independent and roundtrip-verified at write time.
-- Versions are ISO dates everywhere: KanjiVG `version.txt`
-  (`r20260714`) parses to the date at pack; templates stamps the
-  KanjiVG release date (not pack time); kanji stamps the latest of
+- Versions are ISO dates everywhere: kanji stamps the latest of
   KanjiVG/kanjidic2 (new `kanji_version` UniFFI export); kokugo
   stamps the latest of the kaikki extract date and the WordNet
   update date (fetch-data writes `kokugo-sources.json`, new
@@ -107,23 +107,28 @@ cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
 
 ## Recognizer (was: architecture.md)
 
-Sólyom Zoltán's classical two-stage matcher (zkanji): per-stroke
-segment-angle DTW + 16-bit relative-position layout, fused per
-candidate. Everything trajectory-native, no images.
+mlkit-ink (submodule at `external/mlkit-ink`): Google's ML Kit
+Digital Ink Recognition reimplemented outside the SDK —
+preprocessing, Bezier features, IndyLSTM network, CTC decoding and
+the FST language model. `lib/librecognizer` is a thin wrapper: pen
+ink (0..255 x/y, timestamps regenerated downstream) in, text
+candidates with scores out.
 
-- Pen space 0..255 (u8); matcher divides into unit space. KanjiVG
-  sources are 109-native, scaled at parse.
-- Pipeline: `simplify` (denoise: `TINY_MOUSE 0.00725`,
-  `TINY_MODEL 0.00522`) → `dissect` (181 resample points, corner
-  commit at `dsum > len·LENMUL`) → shape DTW (cost `|Δangle|·800`,
-  hook suppression ends `< min(0.2, len·0.18)`, norm `/steps·10`) +
-  layout (`compute_positions` bands, `pos_diff` squared gaps).
-- Fusion per candidate: greedy stroke assignment (order window ±1,
-  unused-only, cap 100000) + layout vs ±2 neighbors + ±5% size prior
-  + missing-stroke fines. Lower wins; absolute values meaningless.
-- Bank: `build_templates` deterministic; rayon map + sequential sort
-  ⇒ bit-identical at any thread count. Full-bank match ~8 ms.
-- Artifacts: `KTM1`/`KTT1` templates, `KJD1` kanji records.
+- Pack loads from bytes: recospec + tflite net, optional compact
+  FST. No FST restricts decoding to the greedy best path.
+- Sourcing (frontends own it; the crate never downloads):
+  the Widgets `ModelPack` table pins the `ja` pack set (names,
+  dl.google.com URLs, sha1s from the AAR manifest) and a second
+  `DataDownloader` instance fetches the zips, sha1-verifies,
+  unzips the single model member each, and installs under
+  `<data>/mlkit-ink/ja/` atomically — same progress-bar flow as
+  the release artifacts, surfaced as a required row in the
+  Dictionaries dialog. qtbridge ports the same table + fetch into
+  its own `model_fetch` module behind its panel Download button.
+- `ffi::Recognizer` (UniFFI object) + `StrokePoint`/`Candidate`
+  records + `script_of`/`stroke_slice`. No model bytes are bundled.
+- The classical zkanji trajectory matcher and its `KTT1` template
+  bank are retired; KanjiVG now feeds only kanji stroke records.
 
 ## Deinflection (was: deinflection-rules.md)
 
@@ -166,10 +171,14 @@ states union class claims; final exact lookup needs
 - Batch: lowercase, whole-word exceptions (konnichiwa/konbanwa),
   longest-token-first (~120 tokens, Hepburn + Kunrei accepted),
   `n`-lookahead, geminate lookahead (`k s t p c f h b d g z j v`,
-  plus `mm`→ん), fallthrough raw. Total, infallible. Always
+  plus `mm`→ん), doubled `n`/`m` overlap (consume one, so `nna` →
+  んな) except at true end-of-input (both, so `nn` → ん),
+  fallthrough raw. Total, infallible. Always
   hiragana out; long vowels never merged.
 - Incremental: single `raw` string; `display = batch(head,
-  lookahead=tail[0]) + tail` over the longest live-tail split.
+  lookahead=tail[0]) + tail` over the longest live-tail split, but a
+  trailing `n`/`m` completing an `nn`/`mm` pair commits instead of
+  staying raw (`nn` → ん, still overlapping into what follows).
   Backspace deletes whole display chars and resyncs; pending mora is
   UI-modal. Acceptance traces live in the Rust tests.
 
