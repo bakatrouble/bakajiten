@@ -15,13 +15,16 @@
 //!   (Android/web rule; Qt dropped info-only senses — that branch
 //!   now renders); numbering is 1-based over the original list so
 //!   gaps stay visible.
-//! - heading/reading preference: first form containing the query,
-//!   else the entry default (empty query -> default).
+//! - heading/reading preference for the matched edge: exact
+//!   match, then edge-anchored (starts-with for prefix, ends-with
+//!   for suffix), then first containing form, else the entry
+//!   default (empty query -> default).
 //! - `query_for` strips a numeric ・n tail only (Qt split at the
 //!   first ・ — narrowed to match Android/web; unpinned by Qt tests).
 //! - `match_range` is the first indexOf (empty query -> `None`);
 //!   offsets are UTF-16 code units for Kotlin/JS/Qt spans.
 use super::{field::Field, misc::Misc, name_type::NameType, pos::Pos};
+use super::search::SearchType;
 use crate::ffi::records::{
     DictEntry, MatchRange, ShapedSense, ShapedSource, ShapedTag, TagKind,
 };
@@ -134,21 +137,47 @@ pub fn is_common_word(entry: &DictEntry) -> bool {
 
 /// Heading form preferring the kanji spelling that contains the
 /// query (desktop heading rule); otherwise the first form.
-pub fn prefer_keb(entry: &DictEntry, query: &str) -> String {
-    if !query.is_empty()
-        && let Some(k) = entry.kanji.iter().find(|k| k.keb.contains(query))
-    {
-        return k.keb.clone();
+pub fn prefer_keb(entry: &DictEntry, query: &str, edge: SearchType) -> String {
+    if !query.is_empty() {
+        if let Some(k) = entry.kanji.iter().find(|k| k.keb == query) {
+            return k.keb.clone();
+        }
+        let anchored = match edge {
+            SearchType::Prefix => entry.kanji.iter().find(|k| k.keb.starts_with(query)),
+            SearchType::Suffix => entry.kanji.iter().find(|k| k.keb.ends_with(query)),
+            SearchType::Middle | SearchType::Exact => None,
+        };
+        if let Some(k) = anchored {
+            return k.keb.clone();
+        }
+        if let Some(k) = entry.kanji.iter().find(|k| k.keb.contains(query)) {
+            return k.keb.clone();
+        }
     }
     entry.heading.clone()
 }
 
-/// Reading preferring the spelling that contains the query.
-pub fn prefer_reb(entry: &DictEntry, query: &str) -> String {
-    if !query.is_empty()
-        && let Some(r) = entry.readings.iter().find(|r| r.reb.contains(query))
-    {
-        return r.reb.clone();
+/// Reading preferring the spelling that matched the query — an
+/// exact match first (the query read itself, e.g. と for an entry
+/// also read そと), then a prefix match (とり for an entry read
+/// にわとり／とり), then the first containing spelling, then the
+/// first reading.
+pub fn prefer_reb(entry: &DictEntry, query: &str, edge: SearchType) -> String {
+    if !query.is_empty() {
+        if let Some(r) = entry.readings.iter().find(|r| r.reb == query) {
+            return r.reb.clone();
+        }
+        let anchored = match edge {
+            SearchType::Prefix => entry.readings.iter().find(|r| r.reb.starts_with(query)),
+            SearchType::Suffix => entry.readings.iter().find(|r| r.reb.ends_with(query)),
+            SearchType::Middle | SearchType::Exact => None,
+        };
+        if let Some(r) = anchored {
+            return r.reb.clone();
+        }
+        if let Some(r) = entry.readings.iter().find(|r| r.reb.contains(query)) {
+            return r.reb.clone();
+        }
     }
     entry.reading.clone()
 }
@@ -309,9 +338,70 @@ mod display_tests {
     #[test]
     fn prefer_forms_follow_query() {
         let e = entry(vec![sense(vec![], vec![], vec![], vec!["to eat"], vec![])]);
-        assert_eq!(prefer_keb(&e, ""), "食べる");
-        assert_eq!(prefer_reb(&e, ""), "たべる");
-        assert_eq!(prefer_keb(&e, "べる"), "食べる");
+        assert_eq!(prefer_keb(&e, "", SearchType::Prefix), "食べる");
+        assert_eq!(prefer_reb(&e, "", SearchType::Prefix), "たべる");
+        assert_eq!(prefer_keb(&e, "べる", SearchType::Middle), "食べる");
+    }
+
+    #[test]
+    fn prefer_reb_prefers_matched_edge() {
+        let mut e = entry(vec![sense(vec![], vec![], vec![], vec!["to eat"], vec![])]);
+        // First reading merely contains the query, second *is* it.
+        e.readings[0].reb = "そと".to_string();
+        e.readings.push(DictReadingElement {
+            reb: "と".to_string(),
+            nokanji: false,
+            restricted_to: vec![],
+            info: vec![],
+            priorities: vec![],
+        });
+        e.reading = "そと".to_string();
+        // The exact match wins in every mode.
+        for edge in [SearchType::Exact, SearchType::Prefix, SearchType::Suffix, SearchType::Middle] {
+            assert_eq!(prefer_reb(&e, "と", edge), "と");
+        }
+        // Then the edge-anchored match: prefix とり over containing にわとり.
+        e.readings[0].reb = "にわとり".to_string();
+        e.readings[1].reb = "とり".to_string();
+        e.reading = "にわとり".to_string();
+        assert_eq!(prefer_reb(&e, "と", SearchType::Prefix), "とり");
+        assert_eq!(prefer_reb(&e, "と", SearchType::Middle), "にわとり");
+        // Suffix anchors at the end instead.
+        e.readings[0].reb = "あと".to_string();
+        e.readings[1].reb = "とり".to_string();
+        e.reading = "あと".to_string();
+        assert_eq!(prefer_reb(&e, "と", SearchType::Suffix), "あと");
+        // No anchored match: first containing spelling, as before.
+        e.readings[0].reb = "にわとり".to_string();
+        e.readings[1].reb = "ほかほか".to_string();
+        e.reading = "にわとり".to_string();
+        assert_eq!(prefer_reb(&e, "と", SearchType::Prefix), "にわとり");
+        // Empty query: first reading, unchanged.
+        assert_eq!(prefer_reb(&e, "", SearchType::Prefix), "にわとり");
+    }
+
+    #[test]
+    fn prefer_keb_prefers_matched_edge() {
+        let mut e = entry(vec![sense(vec![], vec![], vec![], vec!["to eat"], vec![])]);
+        e.kanji.clear();
+        for keb in ["日本食", "食物"] {
+            e.kanji.push(DictKanjiElement {
+                keb: keb.to_string(),
+                info: vec![],
+                priorities: vec![],
+            });
+        }
+        e.heading = "日本食".to_string();
+        // Prefix anchors at the start: 食物 over merely containing 日本食.
+        assert_eq!(prefer_keb(&e, "食", SearchType::Prefix), "食物");
+        // Exact still wins over anchoring.
+        e.kanji.push(DictKanjiElement {
+            keb: "食".to_string(),
+            info: vec![],
+            priorities: vec![],
+        });
+        assert_eq!(prefer_keb(&e, "食", SearchType::Prefix), "食");
+        assert_eq!(prefer_keb(&e, "", SearchType::Prefix), "日本食");
     }
 
     #[test]

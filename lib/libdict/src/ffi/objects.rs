@@ -746,16 +746,20 @@ pub fn is_common_word(entry: DictEntry) -> bool {
     crate::gloss::display::is_common_word(&entry)
 }
 
-/// Heading preferring the kanji spelling containing the query.
+/// Heading preferring the kanji spelling for the matched edge:
+/// exact match, then edge-anchored, then first containing, else
+/// the first form.
 #[uniffi::export]
-pub fn prefer_keb(entry: DictEntry, query: String) -> String {
-    crate::gloss::display::prefer_keb(&entry, &query)
+pub fn prefer_keb(entry: DictEntry, query: String, mode: SearchMode) -> String {
+    crate::gloss::display::prefer_keb(&entry, &query, mode.into())
 }
 
-/// Reading preferring the spelling containing the query.
+/// Reading preferring the spelling for the matched edge:
+/// exact match, then edge-anchored, then first containing, else
+/// the first reading.
 #[uniffi::export]
-pub fn prefer_reb(entry: DictEntry, query: String) -> String {
-    crate::gloss::display::prefer_reb(&entry, &query)
+pub fn prefer_reb(entry: DictEntry, query: String, mode: SearchMode) -> String {
+    crate::gloss::display::prefer_reb(&entry, &query, mode.into())
 }
 
 /// First index of the query in the text as UTF-16 start+length

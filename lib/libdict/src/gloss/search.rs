@@ -56,6 +56,9 @@ pub enum SearchType {
     Prefix,
     Suffix,
     Middle,
+    /// Whole-query match; never routes through the index range
+    /// scan (exact hits verify against the real strings instead).
+    Exact,
 }
 
 pub trait ArchivedDictionaryFile {
@@ -156,11 +159,13 @@ pub trait ArchivedDictionaryFile {
             SearchType::Prefix => query.to_string(),
             SearchType::Suffix => query.chars().rev().collect(),
             SearchType::Middle => unreachable!("handled above"),
+            SearchType::Exact => unreachable!("exact hits verify against the real strings"),
         };
         let index = match type_ {
             SearchType::Prefix => self.forward_index(),
             SearchType::Suffix => self.reverse_index(),
             SearchType::Middle => unreachable!("handled above"),
+            SearchType::Exact => unreachable!("exact hits verify against the real strings"),
         };
 
         let key = to_key(&partition_query);

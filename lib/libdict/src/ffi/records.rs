@@ -108,6 +108,17 @@ pub enum SearchMode {
     Exact,
 }
 
+impl From<SearchMode> for crate::gloss::search::SearchType {
+    fn from(mode: SearchMode) -> Self {
+        match mode {
+            SearchMode::Prefix => crate::gloss::search::SearchType::Prefix,
+            SearchMode::Suffix => crate::gloss::search::SearchType::Suffix,
+            SearchMode::Middle => crate::gloss::search::SearchType::Middle,
+            SearchMode::Exact => crate::gloss::search::SearchType::Exact,
+        }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DictEntry {
     /// First kanji form, else first reading (never empty for packed
