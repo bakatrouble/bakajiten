@@ -8,10 +8,8 @@
 //! Only the `d` attribute of each `<path>` is interpreted. M/L/C/Q
 //! segments are flattened by sampling; everything else is skipped.
 //!
-//! This module exists solely to build the recognition model file
-//! (see [`recognizer::model`]) from a KanjiVG checkout. Runtime
-//! recognition never touches XML: the UI loads only the packed model
-//! (characters + strokes, no ids or stroke-type metadata).
+//! This module exists solely to build the kanji stroke records
+//! from a KanjiVG checkout. Runtime recognition never touches XML.
 
 use super::error::{Error, Result};
 use dict::kanji::{Point, Stroke};

@@ -21,33 +21,6 @@ pub fn kanjivg_release_date(tag: &str) -> Option<String> {
     Some(format!("{y}-{m}-{d}"))
 }
 
-/// `YYYY-MM-DD` as unix epoch (midnight UTC), for the templates
-/// stamp (Howard Hinnant days-from-civil; Gregorian only, which is
-/// all artifact dates are).
-pub fn iso_date_epoch(date: &str) -> Option<u64> {
-    let b = date.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
-        return None;
-    }
-    let y: i64 = date[0..4].parse().ok()?;
-    let m: i64 = date[5..7].parse().ok()?;
-    let d: i64 = date[8..10].parse().ok()?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    if days < 0 {
-        return None;
-    }
-    Some(days as u64 * 86400)
-}
-
 /// Valid stamped date: exactly `YYYY-MM-DD` digits.
 fn is_date(s: &str) -> bool {
     let b = s.as_bytes();
@@ -92,16 +65,6 @@ mod tests {
         assert_eq!(kanjivg_release_date("r20260732"), None);
         assert_eq!(kanjivg_release_date("r2026071"), None);
         assert_eq!(kanjivg_release_date("r2026071x"), None);
-    }
-
-    #[test]
-    fn epoch_matches_civil_date() {
-        // 2026-07-14 00:00 UTC.
-        assert_eq!(iso_date_epoch("2026-07-14"), Some(1783987200));
-        assert_eq!(iso_date_epoch("1970-01-01"), Some(0));
-        assert_eq!(iso_date_epoch("r20260714"), None);
-        assert_eq!(iso_date_epoch("2026-7-14"), None);
-        assert_eq!(iso_date_epoch("2026-13-01"), None);
     }
 
     #[test]

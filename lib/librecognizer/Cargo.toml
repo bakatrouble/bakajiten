@@ -2,20 +2,20 @@
 name = "librecognizer"
 version = "0.1.0"
 edition = "2021"
-description = "Classical handwritten-kanji matching modeled after ZKanji: geometry plus two-stage DTW/layout matcher"
+description = "Handwriting recognition: tegaki's pure-Rust engine (preprocessing, Bezier features, BiLSTM, CTC beam search) plus one-time TFLite+recospec conversion"
 license = "MIT"
-readme = "../README.md"
-keywords = ["kanji", "ocr", "handwriting", "recognition", "kanjivg"]
-categories = ["science", "computer-vision"]
 
 [lib]
 name = "recognizer"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
-rkyv.workspace = true
+ndarray = "0.16"
+safetensors = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror.workspace = true
-rayon.workspace = true
 uniffi.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }

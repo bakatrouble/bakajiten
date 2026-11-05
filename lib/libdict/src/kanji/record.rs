@@ -2,13 +2,9 @@ use super::codes::{Deroo, FourCorner, Kuten, Nelson, Njecd, Oneill, ShDesc, Skip
 use serde::{Deserialize, Serialize};
 
 /// A 2D point in pen space (0..255): KanjiVG stroke data as packed.
-/// Deliberately NOT `recognizer::geometry::Point` (same shape, own
-/// type): a dict→recognizer dependency makes Corrosion's per-crate
-/// `cargo rustc` invocations resolve shared-dependency features
-/// differently, so the recognizer's fingerprint alternates between
-/// invocations and both crates recompile on every build. Strokes
-/// never cross the crate boundary (dict only stores/displays them),
-/// so the twin cannot drift out of sync functionally.
+/// Own type (not shared with the recognizer): strokes never cross
+/// the crate boundary (dict only stores/displays them), so the twin
+/// cannot drift out of sync functionally.
 #[derive(
     Debug,
     Clone,

@@ -2,7 +2,6 @@
 //!
 //! ```sh
 //! cargo run --release -p utils --bin pack-data -- --kanjivg dataimports/kanjivg \
-//!     --templates-out data/templates.bin \
 //!     --kanjidic dataimports/kanjidic2.xml --kanji-out data/kanji.bin \
 //!     --jmdict dataimports/JMdict.xml --jmdict-out data/jmdict.bin \
 //!     --jmnedict dataimports/JMnedict.xml --jmnedict-out data/jmnedict.bin
@@ -11,6 +10,10 @@
 //! Each output is independent: pass only the flags for the files you
 //! want. Every output is verified with a decode roundtrip before
 //! writing.
+//!
+//! Handwriting recognition is not packed here: it runs on language
+//! packs (see `lib/librecognizer`) fetched at runtime rather than
+//! built from KanjiVG.
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -21,7 +24,6 @@ mod jlpt;
 mod kanji;
 mod kokugo;
 mod progress;
-mod templates;
 
 #[derive(Parser)]
 #[command(
@@ -33,9 +35,6 @@ struct Args {
     /// KanjiVG directory (*.svg) or single kanjivg.xml dump
     #[arg(long)]
     kanjivg: Option<PathBuf>,
-    /// Precomputed template-bank file (the app loads this)
-    #[arg(long)]
-    templates_out: Option<PathBuf>,
     /// kanjidic2 XML (joins with KanjiVG for `--kanji-out`)
     #[arg(long)]
     kanjidic: Option<PathBuf>,
@@ -117,27 +116,12 @@ fn print_summary(summary: &Summary, json: bool) {
     }
 }
 
-fn packed_at() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 /// KanjiVG source version (`version.txt` release tag, normalized
 /// to an ISO date, else "unknown": checkouts carry no other
 /// marker).
 fn kanjivg_version(dir: &std::path::Path) -> String {
     let raw = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_else(|_| "unknown".into());
     dict::kanji::version::kanjivg_release_date(&raw).unwrap_or_else(|| "unknown".into())
-}
-
-/// Templates stamp: the KanjiVG release date (not pack time), so
-/// the saved version matches the manifest provenance exactly.
-/// Falls back to pack time when `version.txt` is missing/garbage.
-fn kanjivg_stamp(dir: &std::path::Path) -> u64 {
-    let version = kanjivg_version(dir);
-    dict::kanji::version::iso_date_epoch(&version).unwrap_or_else(packed_at)
 }
 
 /// File count for the load bar: `.svg` files in a directory, else 1
@@ -157,9 +141,6 @@ fn kanjivg_file_count(path: &std::path::Path) -> u64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    if args.templates_out.is_some() && args.kanjivg.is_none() {
-        return Err("--templates-out needs --kanjivg".into());
-    }
     if args.kanji_out.is_some() && (args.kanjivg.is_none() || args.kanjidic.is_none()) {
         return Err("--kanji-out needs --kanjivg and --kanjidic".into());
     }
@@ -173,9 +154,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("--kokugo-out needs --kokugo and --wordnet".into());
     }
 
-    // KanjiVG parses once, shared by both stroke outputs.
+    // KanjiVG parses once, shared by the kanji stroke outputs.
     let parsed = match &args.kanjivg {
-        Some(dir) if args.templates_out.is_some() || args.kanji_out.is_some() => {
+        Some(dir) if args.kanji_out.is_some() => {
             let total = kanjivg_file_count(dir);
             let bar = progress::count_bar("load kanjivg", total);
             let mut n = 0u64;
@@ -188,11 +169,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => None,
     };
-    if let (Some(entries), Some(out)) = (&parsed, &args.templates_out) {
-        let dir = args.kanjivg.as_deref().expect("checked above");
-        let summary = templates::pack(entries, out, kanjivg_stamp(dir), kanjivg_version(dir))?;
-        print_summary(&summary, args.json);
-    }
     if let (Some(entries), Some(kanjidic), Some(out)) = (&parsed, &args.kanjidic, &args.kanji_out) {
         let kanjivg_dir = args.kanjivg.as_deref().expect("checked above");
         let summary = kanji::pack(

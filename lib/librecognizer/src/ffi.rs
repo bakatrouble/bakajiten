@@ -1,67 +1,61 @@
-//! UniFFI foreign-function interface: recognition for Kotlin, Swift,
-//! Python, C++ (Qt, via `uniffi-bindgen-cpp`) and friends.
+//! UniFFI foreign-function interface over the tegaki engine.
 //!
 //! The C++ bindings generate at Qt-build time from the compiled
-//! cdylib (see `ui_qt/CMakeLists.txt` + `ui_qt/README.md`), so they
-//! can never drift: the generated checksums throw on mismatch.
+//! cdylib, so they can never drift: the generated checksums throw
+//! on mismatch.
 //!
-//! The C++ generator (`v0.10.0+v0.31.0`) targets UniFFI 0.31, so the
-//! workspace pins `uniffi = "0.31"` — see the version research in the
-//! Qt migration notes. Bumping past 0.31 needs a newer generator
-//! first.
-//!
-//! The exported surface is deliberately narrow: load model bytes once
-//! into an opaque [`Recognizer`], then score drawings. All matching
-//! numerics live in `rank`/`preprocess`; this module only converts
+//! The exported surface is deliberately narrow: convert the
+//! download packs once ([`convert_model`]), load the converted
+//! bundle into an opaque [`Recognizer`], then decode pen ink.
+//! All numerics live in this crate's ported engine (`ink`,
+//! `features`, `nn`, `vocab`, `decode`); this module only converts
 //! types at the boundary. Panics never cross it — every fallible
-//! operation returns [`RecognizerError`], and UniFFI turns Rust
-//! panics in exported functions into foreign exceptions rather than
-//! undefined behavior.
+//! operation returns [`RecognizerError`].
 //!
 //! [`Recognizer`] is plain data behind an `Arc` (`Send + Sync` by
 //! construction), so foreign callers may share one instance across
-//! threads; rayon parallelizes each query internally.
+//! threads.
 
 use std::sync::Arc;
 
-use crate::model::templates_from_bytes;
-use crate::rank::{find_candidates, KanaFilter, Query, Template};
-use crate::script::{script_of as classify, Script};
-use crate::{Point, Stroke};
+use crate::convert::{ConvertedModel, ConvertError};
+use crate::decode::{beam_search, greedy, ClassBoost, NoLm};
+use crate::ink::Ink;
+use crate::nn::{BiLstm, NnError};
+use crate::vocab::{Vocab, VocabError};
 
-/// Script of the first character (empty reads as other).
-#[uniffi::export]
-pub fn script_of(text: String) -> Script {
-    classify(&text)
-}
-
-/// One pen point in 0..255 pen coords (matches `Point`, which UniFFI
-/// cannot export directly — tuple structs have no record mapping).
+/// One pen point in 0..255 pen coords. Timestamps are not carried:
+/// conversion synthesizes 20ms steps for the whole ink (the JNI
+/// fallback the engine was validated against).
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct StrokePoint {
     pub x: f32,
     pub y: f32,
 }
 
-impl From<StrokePoint> for Point {
-    fn from(p: StrokePoint) -> Self {
-        Point::new(p.x, p.y)
-    }
-}
-
-/// One ranked candidate: the character plus its fused distance.
-/// Lower is better; absolute values are meaningless across inputs —
-/// only ordering matters.
+/// One hypothesis: the decoded text plus its score. Beam scores
+/// are costs (lower ranks first); the greedy score is a mean
+/// frame confidence (higher is surer). Order is what matters —
+/// both lists arrive best first.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct Candidate {
-    /// The matched character, as a single-char string (UniFFI has no
-    /// `char` type).
-    pub character: String,
-    pub distance: u64,
-    /// Whether the template is hiragana/katakana (same predicate as
-    /// [`KanaFilter`]: U+3040–U+30FF). Lets foreign callers style
-    /// kana hits without re-deriving script ranges.
-    pub is_kana: bool,
+    pub text: String,
+    pub score: f64,
+}
+
+/// Converted runtime bundle: the dequantized net plus the JSON
+/// vocab the decoder rebuilds its class table from.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ConvertedBundle {
+    pub safetensors: Vec<u8>,
+}
+
+impl From<ConvertedModel> for ConvertedBundle {
+    fn from(model: ConvertedModel) -> Self {
+        Self {
+            safetensors: model.safetensors,
+        }
+    }
 }
 
 /// Failures surfaced across the FFI boundary.
@@ -70,178 +64,185 @@ pub struct Candidate {
 /// generator needs field names to emit valid types.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum RecognizerError {
-    /// Model bytes fail to decode (see `model::templates_from_bytes`).
+    /// Pack or bundle bytes fail to decode.
     #[error("invalid model: {message}")]
     InvalidModel { message: String },
-    /// The model decoded but holds zero templates.
-    #[error("model holds no templates")]
-    EmptyBank,
+    /// Decoding failed.
+    #[error("recognition failed: {message}")]
+    RecognitionFailed { message: String },
 }
 
-/// Pack timestamp (`packed_at`, unix seconds) of a `templates.bin`
-/// on disk: 16-byte header read only, no model decode. Lets the
-/// Android dictionary manager show the saved version.
+impl From<ConvertError> for RecognizerError {
+    fn from(e: ConvertError) -> Self {
+        Self::InvalidModel { message: e.to_string() }
+    }
+}
+
+impl From<NnError> for RecognizerError {
+    fn from(e: NnError) -> Self {
+        Self::InvalidModel { message: e.to_string() }
+    }
+}
+
+impl From<VocabError> for RecognizerError {
+    fn from(e: VocabError) -> Self {
+        Self::InvalidModel { message: e.to_string() }
+    }
+}
+
+/// Convert download packs into the runtime bundle: the `.tflite`
+/// net plus the recospec protobuf become one `network.safetensors`.
+/// Runs once per pack update; the Qt download path calls it after
+/// unzipping, before installing.
 #[uniffi::export]
-pub fn templates_packed_at(path: String) -> Result<u64, RecognizerError> {
-    use crate::model::{TEMPLATES_MAGIC, TEMPLATES_VERSION};
-    use std::io::Read;
-    let mut head = [0u8; 16];
-    std::fs::File::open(&path)
-        .and_then(|mut f| f.read_exact(&mut head))
-        .map_err(|e| RecognizerError::InvalidModel {
-            message: format!("{path}: {e}"),
-        })?;
-    if &head[..4] != TEMPLATES_MAGIC {
-        return Err(RecognizerError::InvalidModel {
-            message: format!("{path}: missing magic (want KTT1)"),
-        });
-    }
-    let version = u32::from_le_bytes(head[4..8].try_into().expect("4-byte slice"));
-    if version != TEMPLATES_VERSION {
-        return Err(RecognizerError::InvalidModel {
-            message: format!("{path}: unsupported version {version}"),
-        });
-    }
-    Ok(u64::from_le_bytes(head[8..16].try_into().expect("8-byte slice")))
+pub fn convert_model(
+    tflite_bytes: Vec<u8>,
+    recospec_bytes: Vec<u8>,
+) -> Result<ConvertedBundle, RecognizerError> {
+    crate::convert::convert_model(&tflite_bytes, &recospec_bytes)
+        .map(ConvertedBundle::from)
+        .map_err(RecognizerError::from)
+}
+
+/// Whole ink from pen strokes: one inner vec per stroke, in
+/// 0..255 pen coords, timestamps synthesized (20ms steps).
+fn ink_from_pen(strokes: Vec<Vec<StrokePoint>>) -> Ink {
+    Ink::from_raw(
+        strokes
+            .into_iter()
+            .map(|s| s.into_iter().map(|p| (p.x, p.y, None)).collect())
+            .collect(),
+    )
 }
 
 /// Fractional stroke reveal for players (arc-length + interpolated
 /// tip): constant drawing speed regardless of point density.
 #[uniffi::export]
 pub fn stroke_slice(points: Vec<StrokePoint>, fraction: f32) -> Vec<StrokePoint> {
-    crate::geometry::stroke_slice(
-        &points.into_iter().map(Point::from).collect::<Vec<_>>(),
-        fraction,
-    )
-    .into_iter()
-    .map(|p| StrokePoint { x: p.x, y: p.y })
-    .collect()
+    if points.is_empty() || fraction <= 0.0 {
+        return Vec::new();
+    }
+    let first = points[0].clone();
+    let mut segs = Vec::with_capacity(points.len().saturating_sub(1));
+    let mut total = 0.0f64;
+    for w in points.windows(2) {
+        let len = f64::hypot((w[1].x - w[0].x) as f64, (w[1].y - w[0].y) as f64);
+        segs.push(len);
+        total += len;
+    }
+    if total <= 0.0 {
+        return vec![first];
+    }
+    let mut target = f64::min(fraction as f64, 1.0) * total;
+    let mut out = vec![first];
+    for (i, w) in points.windows(2).enumerate() {
+        let seg = segs[i];
+        if target > seg {
+            target -= seg;
+            out.push(w[1].clone());
+        } else {
+            let t = if seg > 0.0 { target / seg } else { 0.0 };
+            out.push(StrokePoint {
+                x: (w[0].x as f64 + t * (w[1].x as f64 - w[0].x as f64)) as f32,
+                y: (w[0].y as f64 + t * (w[1].y as f64 - w[0].y as f64)) as f32,
+            });
+            break;
+        }
+    }
+    out
 }
 
-/// Opaque recognizer: a template bank built once from model bytes.
-#[derive(Debug, uniffi::Object)]
+/// Opaque recognizer: the converted Japanese bundle (safetensors
+/// net with the vocab in its header metadata).
+#[derive(uniffi::Object)]
 pub struct Recognizer {
-    bank: Vec<Template>,
-    packed_at: u64,
+    net: BiLstm,
+    vocab: Vocab,
+    boost: ClassBoost,
 }
+
+/// Beam width for interactive recognition: tegaki's GUI passes 8
+/// (recospec decoder flag `f12 = 2` is the production beam
+/// factor); the beam follows the request below, never dropping
+/// under it, so a `topK` strip always has candidates to fill.
+const INTERACTIVE_BEAM_WIDTH: usize = 8;
 
 #[uniffi::export]
 impl Recognizer {
-    /// Build a recognizer from `KTT1` template-bank bytes (see
-    /// `model`). Share the returned handle across threads and
-    /// queries.
+    /// Build a recognizer from converted bundle contents: the
+    /// safetensors net (vocab rides its header metadata). Share
+    /// the returned handle across threads and queries.
     #[uniffi::constructor]
-    pub fn new(model_bytes: Vec<u8>) -> Result<Arc<Self>, RecognizerError> {
-        let (bank, packed_at) =
-            templates_from_bytes(&model_bytes).map_err(|e| RecognizerError::InvalidModel {
-                message: e.to_string(),
-            })?;
-        if bank.is_empty() {
-            return Err(RecognizerError::EmptyBank);
-        }
-        Ok(Arc::new(Self { bank, packed_at }))
+    pub fn new(safetensors_bytes: Vec<u8>) -> Result<Arc<Self>, RecognizerError> {
+        let net = BiLstm::from_bytes(&safetensors_bytes)?;
+        let (codepoints, classes, spec) = crate::convert::read_vocab(&safetensors_bytes)?;
+        let vocab = Vocab::new(codepoints)?;
+        let classes: Vec<(String, f32)> =
+            classes.into_iter().map(|(c, w)| (c, w as f32)).collect();
+        let boost = ClassBoost::build(vocab.codepoints(), &classes, &spec);
+        Ok(Arc::new(Self { net, vocab, boost }))
     }
 
-    /// Rank candidates for raw pen strokes: one inner vec per stroke,
-    /// in 0..255 pen coords. Returns the `top_k` best (lower distance
-    /// first); `top_k = 0` returns the whole bank, sorted.
-    /// `include_kana` selects kanji+kana (`true`) or kanji-only
-    /// (`false`) matching.
+    /// Decode pen strokes: one inner vec per stroke, in 0..255 pen
+    /// coords. Returns the `nbest` best hypotheses, best first.
+    /// Empty ink decodes to no candidates.
     pub fn recognize(
         &self,
         strokes: Vec<Vec<StrokePoint>>,
-        top_k: u32,
-        include_kana: bool,
-    ) -> Vec<Candidate> {
-        let raw: Vec<Stroke> = strokes
+        nbest: u32,
+    ) -> Result<Vec<Candidate>, RecognizerError> {
+        let ink = ink_from_pen(strokes);
+        if ink.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (feats, _) = crate::features::extract(&ink, None, &crate::features::FeatureConfig::default());
+        if feats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let logits = self.net.forward(&feats);
+        let width = (nbest.max(1) as usize).max(INTERACTIVE_BEAM_WIDTH);
+        let mut hits = beam_search(&logits, width, &self.boost, &self.vocab);
+        hits.truncate(nbest.max(1) as usize);
+        Ok(hits
             .into_iter()
-            .map(|s| Stroke::new(s.into_iter().map(Point::from).collect()))
-            .collect();
-        let query = Query::drawn(&raw);
-        let kana = if include_kana {
-            KanaFilter::All
-        } else {
-            KanaFilter::SkipKana
-        };
-        find_candidates(&query, &self.bank, top_k as usize, kana)
-            .into_iter()
-            .map(|hit| Candidate {
-                character: hit.character.to_string(),
-                distance: hit.distance,
-                is_kana: hit.is_kana,
-            })
-            .collect()
+            .map(|h| Candidate { text: h.text, score: h.score as f64 })
+            .collect())
     }
 
-    /// Template (bank) count.
-    pub fn template_count(&self) -> u64 {
-        self.bank.len() as u64
-    }
-
-    /// Shape-similar kanji for drawn strokes (the kanji dialog's
-    /// Similar strip): kanji-only match like `recognize` with
-    /// `include_kana = false`, the `exclude` character dropped,
-    /// capped at `top_k` shown (`top_k = 0` shows nothing — unlike
-    /// `recognize`, where it means the whole bank). Self exclusion
-    /// compares text (not rank — self usually leads, but the filter
-    /// holds regardless). Empty without strokes.
-    pub fn similar(
+    /// Best-path decode, ignoring the language model entirely.
+    pub fn recognize_greedy(
         &self,
         strokes: Vec<Vec<StrokePoint>>,
-        exclude: String,
-        top_k: u32,
-    ) -> Vec<Candidate> {
-        if strokes.iter().all(|s| s.is_empty()) {
-            return Vec::new();
+    ) -> Result<Candidate, RecognizerError> {
+        let ink = ink_from_pen(strokes);
+        if ink.is_empty() {
+            return Err(RecognizerError::RecognitionFailed {
+                message: String::from("empty ink"),
+            });
         }
-        self.recognize(strokes, top_k.saturating_add(1), false)
-            .into_iter()
-            .filter(|hit| hit.character != exclude)
-            .take(top_k as usize)
-            .collect()
+        let (feats, _) = crate::features::extract(&ink, None, &crate::features::FeatureConfig::default());
+        if feats.is_empty() {
+            return Err(RecognizerError::RecognitionFailed {
+                message: String::from("empty ink"),
+            });
+        }
+        let logits = self.net.forward(&feats);
+        let (text, conf) = greedy(&logits, &self.vocab);
+        Ok(Candidate { text, score: conf as f64 })
     }
 
-    /// Pack timestamp of the loaded bank (unix seconds).
-    pub fn model_packed_at(&self) -> u64 {
-        self.packed_at
+    /// The engine ships no word-level language model (the compact
+    /// FST is a proprietary format): kept so callers can branch on
+    /// it, always false.
+    pub fn has_language_model(&self) -> bool {
+        let _ = NoLm;
+        false
     }
 }
 
 #[cfg(test)]
 mod ffi_tests {
     use super::*;
-    use crate::model::{build_templates, templates_to_bytes, ModelEntry};
-
-    const STAMP: u64 = 1_700_000_000;
-
-    #[test]
-    fn ffi_templates_packed_at_reads_header_only() {
-        let path = std::env::temp_dir().join("ffi-test-templates-packed-at.bin");
-        std::fs::write(&path, toy_model()).unwrap();
-        assert_eq!(
-            templates_packed_at(path.to_str().unwrap().into()).unwrap(),
-            STAMP
-        );
-        assert!(templates_packed_at("/nonexistent/bakajiten-templates-test.bin".into()).is_err());
-    }
-
-    fn toy_model() -> Vec<u8> {
-        let h = ModelEntry {
-            character: '一',
-            strokes: vec![Stroke::new(vec![
-                Point::new(10.0, 50.0),
-                Point::new(90.0, 50.0),
-            ])],
-        };
-        let v = ModelEntry {
-            character: '｜',
-            strokes: vec![Stroke::new(vec![
-                Point::new(50.0, 10.0),
-                Point::new(50.0, 90.0),
-            ])],
-        };
-        templates_to_bytes(&build_templates(&[h, v]), STAMP)
-    }
 
     fn hline() -> Vec<StrokePoint> {
         vec![
@@ -251,75 +252,36 @@ mod ffi_tests {
     }
 
     #[test]
-    fn ffi_recognizes_through_the_exported_api() {
-        let r = Recognizer::new(toy_model()).unwrap();
-        assert_eq!(r.template_count(), 2);
-        assert_eq!(r.model_packed_at(), STAMP);
-        let hits = r.recognize(vec![hline()], 2, true);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].character, "一");
-        assert!(hits[0].distance < hits[1].distance);
-        // Whole-bank order matches the native ranking.
-        let all = r.recognize(vec![hline()], 0, true);
-        assert_eq!(all.len(), 2);
-        // Neither toy template is kana, so kanji-only matches all.
-        let kanji = r.recognize(vec![hline()], 0, false);
-        assert_eq!(kanji.len(), 2);
-    }
-
-    #[test]
-    fn ffi_marks_kana_candidates() {
-        let kana = ModelEntry {
-            character: 'あ',
-            strokes: vec![Stroke::new(vec![
-                Point::new(20.0, 20.0),
-                Point::new(80.0, 30.0),
-            ])],
-        };
-        let kanji = ModelEntry {
-            character: '一',
-            strokes: vec![Stroke::new(vec![
-                Point::new(10.0, 50.0),
-                Point::new(90.0, 50.0),
-            ])],
-        };
-        let r =
-            Recognizer::new(templates_to_bytes(&build_templates(&[kana, kanji]), STAMP)).unwrap();
-        let hits = r.recognize(vec![hline()], 0, true);
-        assert_eq!(hits.len(), 2);
-        let kana_hit = hits.iter().find(|c| c.character == "あ").unwrap();
-        assert!(kana_hit.is_kana);
-        let kanji_hit = hits.iter().find(|c| c.character == "一").unwrap();
-        assert!(!kanji_hit.is_kana);
-    }
-
-    #[test]
-    fn ffi_similar_excludes_and_caps() {
-        let r = Recognizer::new(toy_model()).unwrap();
-        // Best match (一) excluded by text; the other template
-        // shows, capped at one.
-        let hits = r.similar(vec![hline()], "一".into(), 1);
-        assert_eq!(hits.len(), 1);
-        assert_ne!(hits[0].character, "一");
-        assert!(!hits[0].is_kana);
-        // Nothing excluded: best first, capped.
-        let all = r.similar(vec![hline()], String::new(), 10);
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].character, "一");
-        // Empty strokes match nothing; zero cap shows nothing.
-        assert!(r.similar(vec![], "一".into(), 5).is_empty());
-        assert!(r.similar(vec![hline()], String::new(), 0).is_empty());
-    }
-
-    #[test]
     fn ffi_rejects_garbage_model() {
         assert!(matches!(
             Recognizer::new(b"not a model".to_vec()),
             Err(RecognizerError::InvalidModel { .. })
         ));
         assert!(matches!(
-            Recognizer::new(templates_to_bytes(&[], STAMP)),
-            Err(RecognizerError::EmptyBank)
+            convert_model(b"not a net".to_vec(), b"not a spec".to_vec()),
+            Err(RecognizerError::InvalidModel { .. })
         ));
+    }
+
+    #[test]
+    fn ffi_empty_ink_decodes_to_nothing() {
+        // Bytes that fail `Recognizer::new` never reach decoding, so
+        // empty-ink behavior is asserted at the conversion layer: no
+        // samples in, no samples out.
+        let ink = ink_from_pen(vec![]);
+        assert!(ink.is_empty());
+        let one_empty: Vec<Vec<StrokePoint>> = vec![vec![]];
+        assert!(ink_from_pen(one_empty).is_empty());
+    }
+
+    #[test]
+    fn ffi_slice_reveals_by_arc_length() {
+        assert!(stroke_slice(vec![], 0.5).is_empty());
+        assert!(stroke_slice(hline(), 0.0).is_empty());
+        let out = stroke_slice(hline(), 1.0);
+        assert_eq!(out.len(), 2);
+        let quarter = stroke_slice(hline(), 0.25);
+        assert_eq!(quarter.len(), 2);
+        assert!((quarter[1].x - 31.0).abs() < 1.0);
     }
 }
