@@ -55,15 +55,25 @@ fn convert(bytes: &[u8], text: &str, lookahead: Option<u8>, out: &mut String) {
             }
             match byte {
                 // Moraic n commits always; the apostrophe escape
-                // eats two (`kin'en` → きんえん).
+                // eats two (`kin'en` → きんえん). A doubled n
+                // overlaps: only the terminator is consumed when
+                // more follows (`nna` → んな), both at true
+                // end-of-input (`nn` → ん).
                 b'n' => {
                     out.push('ん');
-                    p += if at(p + 1) == Some(b'\'') { 2 } else { 1 };
+                    p += if at(p + 1) == Some(b'\'') {
+                        2
+                    } else if at(p + 1) == Some(b'n') && at(p + 2).is_none() {
+                        2
+                    } else {
+                        1
+                    };
                 }
-                // `mm` mirrors `nn` (`emma` → えんま).
+                // `mm` mirrors `nn` (`emma` → えんま), same
+                // end-of-input rule (`mm` → ん).
                 b'm' if at(p + 1) == Some(b'm') => {
                     out.push('ん');
-                    p += 1;
+                    p += if at(p + 2).is_none() { 2 } else { 1 };
                 }
                 // Geminate pair (`gakkou` → がっこう).
                 _ if at(p + 1) == Some(byte) && GEMINABLE.contains(&byte) => {
@@ -99,23 +109,11 @@ pub fn to_kana(text: &str) -> String {
     out
 }
 
-/// True when the buffer ends mid-mora (same scan as
-/// [`display`]: some suffix is a live table prefix, so the tail
-/// shows raw). The trackside input owns composition gating behind
-/// this (arrows, space, return and friends wait for the mora to
-/// settle or backspace); conversion itself never consults it.
-pub fn has_pending_tail(raw: &str) -> bool {
-    let lower = raw.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
-    (0..bytes.len()).any(|i| is_live_prefix(&bytes[i..]))
-}
-
-/// IME display: longest live tail stays raw (`shin` → しn), the head
-/// converts with one char of lookahead (`katt` → かっt). Empty tail
-/// converts whole, exceptions included.
-pub fn display(raw: &str) -> String {
-    let lower = raw.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
+/// Live head/tail split: longest live tail stays raw (`shin` →
+/// しn), converted with one char of lookahead. A trailing n/m
+/// that completes an `nn`/`mm` pair commits instead (`nn` → ん):
+/// the pair's second half is no longer held out as raw tail.
+fn live_split(bytes: &[u8]) -> usize {
     let mut split = bytes.len();
     for i in 0..bytes.len() {
         if is_live_prefix(&bytes[i..]) {
@@ -123,6 +121,35 @@ pub fn display(raw: &str) -> String {
             break;
         }
     }
+    if split < bytes.len() && split > 0 {
+        let tail = bytes[split];
+        if (tail == b'n' && bytes[split - 1] == b'n')
+            || (tail == b'm' && bytes[split - 1] == b'm')
+        {
+            split += 1;
+        }
+    }
+    split
+}
+
+/// True when the buffer ends mid-mora (same split as
+/// [`display`]: a raw tail shows, so the trackside input owns
+/// composition gating behind this — arrows, space, return and
+/// friends wait for the mora to settle or backspace; conversion
+/// itself never consults it).
+pub fn has_pending_tail(raw: &str) -> bool {
+    let lower = raw.to_ascii_lowercase();
+    live_split(lower.as_bytes()) < lower.len()
+}
+
+/// IME display: longest live tail stays raw (`shin` → しn), the head
+/// converts with one char of lookahead (`katt` → かっt). A
+/// completed `nn`/`mm` pair commits whole (`nn` → ん). Empty tail
+/// converts whole, exceptions included.
+pub fn display(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let split = live_split(bytes);
     if split == bytes.len() {
         return to_kana(raw);
     }

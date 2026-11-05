@@ -28,6 +28,8 @@ fn batch_acceptance() {
         ("emma", "えんま"), ("komatta", "こまった"),
         ("kinen", "きねん"), ("ginen", "ぎねん"),
         ("kin'en", "きんえん"), ("shin", "しん"), ("hon", "ほん"),
+        ("n", "ん"), ("nn", "ん"), ("nnn", "んん"),
+        ("mm", "ん"), ("anna", "あんな"),
         ("shinya", "しにゃ"), ("shin'ya", "しんや"),
         ("xtsu", "っ"), ("ltu", "っ"), ("xa", "ぁ"),
         ("xyo", "ょ"), ("xwa", "ゎ"), ("fa", "ふぁ"),
@@ -48,14 +50,15 @@ fn display_acceptance() {
     #[rustfmt::skip]
     let rows = [
         ("s", "s"), ("sh", "sh"), ("shi", "し"),
-        ("n", "n"), ("na", "な"), ("nn", "んn"), ("nna", "んな"),
+        ("n", "n"), ("na", "な"), ("nn", "ん"), ("nna", "んな"),
+        ("nnn", "んん"), ("mm", "ん"),
         ("t", "t"), ("tc", "tc"), ("tch", "tch"), ("tchi", "っち"),
         ("shin", "しn"), ("shina", "しな"), ("shinya", "しにゃ"),
         ("sha", "しゃ"), ("sho", "しょ"), ("shu", "しゅ"),
         ("shin'a", "しんあ"), ("ka", "か"), ("kat", "かt"),
         ("katta", "かった"), ("katt", "かっt"), ("kat", "かt"),
         ("gakk", "がっk"), ("ko", "こ"), ("kon", "こn"),
-        ("konn", "こんn"), ("konni", "こんに"),
+        ("konn", "こん"), ("konni", "こんに"),
         ("konnichi", "こんにち"), ("konnichiw", "こんにちw"),
         ("konnichiwa", "こんにちは"), ("tsu", "つ"), ("du", "づ"),
         ("thi", "てぃ"), ("wo", "を"), ("-", "ー"),
@@ -75,8 +78,12 @@ fn pending_tail_traces() {
     assert!(has_pending_tail("sh"));
     assert!(has_pending_tail("t"));
     assert!(has_pending_tail("たn"));
-    // Settled buffers convert whole: no tail shows raw.
+    // Settled buffers convert whole: no tail shows raw — a
+    // completed nn/mm pair commits (the second half is overlap
+    // for what follows, not pending).
     assert!(!has_pending_tail(""));
+    assert!(!has_pending_tail("nn"));
+    assert!(!has_pending_tail("mm"));
     assert!(!has_pending_tail("ta"));
     assert!(!has_pending_tail("shi"));
     assert!(!has_pending_tail("たべる"));
