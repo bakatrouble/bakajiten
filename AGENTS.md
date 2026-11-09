@@ -169,7 +169,7 @@ states union class claims; final exact lookup needs
 ## Query-edge conversion (was: romaji-kana.md + ime-conversion.md)
 
 - Batch: lowercase, whole-word exceptions (konnichiwa/konbanwa),
-  longest-token-first (~120 tokens, Hepburn + Kunrei accepted),
+  longest-token-first (~265 tokens: Hepburn + Kunrei + zkanji foreign/small-kana spellings),
   `n`-lookahead, geminate lookahead (`k s t p c f h b d g z j v`,
   plus `mm`→ん), doubled `n`/`m` overlap (consume one, so `nna` →
   んな) except at true end-of-input (both, so `nn` → ん),

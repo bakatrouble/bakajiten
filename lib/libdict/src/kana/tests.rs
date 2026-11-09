@@ -38,7 +38,8 @@ fn batch_acceptance() {
         ("pa-thi", "ぱーてぃ"), ("食べる", "食べる"),
         ("あ", "あ"), ("漢字", "漢字"),
         ("taberu食べる", "たべる食べる"), ("hello", "へlぉ"),
-        ("'", "'"),
+        ("'", "'"), ("/", "・"), ("n/", "ん・"),
+        ("a/b", "あ・b"),
     ];
     for (input, expected) in rows {
         assert_eq!(to_kana(input), expected, "batch {input:?}");
@@ -62,6 +63,16 @@ fn display_acceptance() {
         ("konnichi", "こんにち"), ("konnichiw", "こんにちw"),
         ("konnichiwa", "こんにちは"), ("tsu", "つ"), ("du", "づ"),
         ("thi", "てぃ"), ("wo", "を"), ("-", "ー"),
+        ("qa", "くぁ"), ("qwa", "くぁ"), ("whi", "うぃ"),
+        ("dye", "ぢぇ"), ("tse", "つぇ"), ("cyu", "ちゅ"),
+        ("gwe", "ぐぇ"), ("rye", "りぇ"), ("lka", "ヶ"),
+        ("xn", "xn"), ("yi", "い"), ("twa", "とぁ"),
+        ("vyu", "ゔゅ"), ("she", "しぇ"), ("tha", "てゃ"),
+        ("dha", "でゃ"), ("mye", "みぇ"), ("pyi", "ぴぃ"),
+        ("nye", "にぇ"), ("fwe", "ふぇ"), ("je", "じぇ"),
+        ("kye", "きぇ"), ("zye", "じぇ"), ("hye", "ひぇ"),
+        ("bye", "びぇ"), ("swu", "すぅ"),
+        ("/", "・"), ("a/b", "あ・b"),
         ("xtsu", "っ"), ("n'", "ん"), ("q", "q"),
     ];
     for (raw, expected) in rows {
@@ -86,6 +97,10 @@ fn pending_tail_traces() {
     assert!(!has_pending_tail("mm"));
     assert!(!has_pending_tail("ta"));
     assert!(!has_pending_tail("shi"));
+    assert!(!has_pending_tail("/"));
+    assert!(!has_pending_tail("n/"));
+    // q opens foreign spellings now (matches zkanji pending it).
+    assert!(has_pending_tail("q"));
     assert!(!has_pending_tail("たべる"));
     assert!(!has_pending_tail("食べる"));
 }
